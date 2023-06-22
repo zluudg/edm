@@ -18,9 +18,11 @@ Usage of /usr/local/bin/dta:
   -debug
     	print debug logging during operation
   -file-format string
-    	output format ('json' or 'fstrm') (default "json")
+    	output format when writing to a file ('json' or 'fstrm') (default "json")
   -output-filename string
-    	the filename to write dnstap streams to (empty or '-' means stdout)
+    	the filename to write dnstap streams to ('-' means stdout)
+  -output-tcp string
+    	the target and port to write dnstap streams to, e.g. '127.0.0.1:5555'
   -simple-random-sampling-n int
     	only capture random 1-out-of-N dnstap messages, 0 disables sampling
   -unix-socket-path string
@@ -34,12 +36,12 @@ crypto-PAn secret (by default the config is read from the current working direct
 Basic usage, writing anonymized json data to `stdout`:
 ```
 echo 'cryptopan-key = "mysecret"' > dta.toml
-dta -unix-socket-path /opt/unbound/dnstap.sock
+dta -unix-socket-path /opt/unbound/dnstap.sock -output-filename -
 ```
 ... writing `fstrm` data instead, only sampling 1-out-of-10 dnstap messages and
 using a custom configuration file:
 ```
-dta -unix-socket-path /opt/unbound/dnstap.sock -file-format fstrm -simple-random-sampling-n 10 -config /etc/my-custom-dta.toml
+dta -unix-socket-path /opt/unbound/dnstap.sock -output-filename - -file-format fstrm -simple-random-sampling-n 10 -config /etc/my-custom-dta.toml
 ```
 
 ## Development

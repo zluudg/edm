@@ -32,13 +32,19 @@ func main() {
 	// Handle flags
 	debug := flag.Bool("debug", false, "print debug logging during operation")
 	configFile := flag.String("config", "dta.toml", "config file for sensitive information")
-	fileformat := flag.String("file-format", "json", "output format ('json' or 'fstrm')")
+	fileformat := flag.String("file-format", "json", "output format when writing to a file ('json' or 'fstrm')")
 	unixSocketPath := flag.String("unix-socket-path", "/var/lib/unbound/dnstap.sock", "the unix socket we create for dnstap senders")
-	outputFilename := flag.String("output-filename", "", "the filename to write dnstap streams to (empty or '-' means stdout)")
+	outputFilename := flag.String("output-filename", "", "the filename to write dnstap streams to ('-' means stdout)")
+	outputTCP := flag.String("output-tcp", "", "the target and port to write dnstap streams to, e.g. '127.0.0.1:5555'")
 	cryptoPanKey := flag.String("cryptopan-key", "", "override the secret used for Crypto-PAn anonymization")
 	cryptoPanKeySalt := flag.String("cryptopan-key-salt", "dta-kdf-salt-val", "the salt used for key derivation")
 	simpleRandomSamplingN := flag.Int("simple-random-sampling-n", 0, "only capture random 1-out-of-N dnstap messages, 0 disables sampling")
 	flag.Parse()
+
+	// For now we only support a single output at a time
+	if *outputFilename != "" && *outputTCP != "" {
+		log.Fatal("flags -output-filename and -output-tcp are mutually exclusive, use only one")
+	}
 
 	conf, err := readConfig(*configFile)
 	if err != nil {
@@ -62,19 +68,33 @@ func main() {
 	// Configure the selected output writer
 	var dnstapOutput dnstap.Output
 
-	switch *fileformat {
-	case "fstrm":
-		dnstapOutput, err = dnstap.NewFrameStreamOutputFromFilename(*outputFilename)
+	if *outputFilename != "" {
+		switch *fileformat {
+		case "fstrm":
+			dnstapOutput, err = dnstap.NewFrameStreamOutputFromFilename(*outputFilename)
+			if err != nil {
+				log.Fatal(err)
+			}
+		case "json":
+			dnstapOutput, err = dnstap.NewTextOutputFromFilename(*outputFilename, dnstap.JSONFormat, false)
+			if err != nil {
+				log.Fatal(err)
+			}
+		default:
+			log.Fatal("-file-format must be 'fstrm' or 'json'")
+		}
+	} else if *outputTCP != "" {
+		var naddr net.Addr
+		naddr, err := net.ResolveTCPAddr("tcp", *outputTCP)
 		if err != nil {
 			log.Fatal(err)
 		}
-	case "json":
-		dnstapOutput, err = dnstap.NewTextOutputFromFilename(*outputFilename, dnstap.JSONFormat, false)
+		dnstapOutput, err = dnstap.NewFrameStreamSockOutput(naddr)
 		if err != nil {
 			log.Fatal(err)
 		}
-	default:
-		log.Fatal("file-format must be 'fstrm' or 'json'")
+	} else {
+		log.Fatal("must set -output-filename or -output-tcp")
 	}
 
 	// Enable logging for the selected output worker
