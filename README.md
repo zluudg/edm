@@ -7,8 +7,7 @@ Currently expects to read dnstap from a unix socket and can write the
 anonymized output to either JSON-formatted text or raw framestream data that
 can be read by other dnstap tools.
 ```
-dta --help
-Usage of /usr/local/bin/dta:
+Usage of ./dta:
   -config string
     	config file for sensitive information (default "dta.toml")
   -cryptopan-key string
@@ -19,14 +18,14 @@ Usage of /usr/local/bin/dta:
     	print debug logging during operation
   -file-format string
     	output format when writing to a file ('json' or 'fstrm') (default "json")
+  -input-unix string
+    	create unix socket for reading dnstap (default "/var/lib/unbound/dnstap.sock")
   -output-filename string
     	the filename to write dnstap streams to ('-' means stdout)
   -output-tcp string
     	the target and port to write dnstap streams to, e.g. '127.0.0.1:5555'
   -simple-random-sampling-n int
     	only capture random 1-out-of-N dnstap messages, 0 disables sampling
-  -unix-socket-path string
-    	the unix socket we create for dnstap senders (default "/var/lib/unbound/dnstap.sock")
 ```
 
 ## Usage
