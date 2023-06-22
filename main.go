@@ -33,7 +33,7 @@ func main() {
 	debug := flag.Bool("debug", false, "print debug logging during operation")
 	configFile := flag.String("config", "dta.toml", "config file for sensitive information")
 	fileformat := flag.String("file-format", "json", "output format when writing to a file ('json' or 'fstrm')")
-	unixSocketPath := flag.String("unix-socket-path", "/var/lib/unbound/dnstap.sock", "the unix socket we create for dnstap senders")
+	inputUnixSocketPath := flag.String("input-unix", "/var/lib/unbound/dnstap.sock", "create unix socket for reading dnstap")
 	outputFilename := flag.String("output-filename", "", "the filename to write dnstap streams to ('-' means stdout)")
 	outputTCP := flag.String("output-tcp", "", "the target and port to write dnstap streams to, e.g. '127.0.0.1:5555'")
 	cryptoPanKey := flag.String("cryptopan-key", "", "override the secret used for Crypto-PAn anonymization")
@@ -122,7 +122,7 @@ func main() {
 	}
 
 	// Setup the unix socket dnstap.Input
-	dti, err := dnstap.NewFrameStreamSockInputFromPath(*unixSocketPath)
+	dti, err := dnstap.NewFrameStreamSockInputFromPath(*inputUnixSocketPath)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -36,12 +36,12 @@ crypto-PAn secret (by default the config is read from the current working direct
 Basic usage, writing anonymized json data to `stdout`:
 ```
 echo 'cryptopan-key = "mysecret"' > dta.toml
-dta -unix-socket-path /opt/unbound/dnstap.sock -output-filename -
+dta -input-unix /opt/unbound/dnstap.sock -output-filename -
 ```
 ... writing `fstrm` data instead, only sampling 1-out-of-10 dnstap messages and
 using a custom configuration file:
 ```
-dta -unix-socket-path /opt/unbound/dnstap.sock -output-filename - -file-format fstrm -simple-random-sampling-n 10 -config /etc/my-custom-dta.toml
+dta -input-unix /opt/unbound/dnstap.sock -output-filename - -file-format fstrm -simple-random-sampling-n 10 -config /etc/my-custom-dta.toml
 ```
 
 ## Development
