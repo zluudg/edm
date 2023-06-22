@@ -34,7 +34,7 @@ func main() {
 	configFile := flag.String("config", "dta.toml", "config file for sensitive information")
 	fileformat := flag.String("file-format", "json", "output format when writing to a file ('json' or 'fstrm')")
 	inputUnixSocketPath := flag.String("input-unix", "/var/lib/unbound/dnstap.sock", "create unix socket for reading dnstap")
-	outputFilename := flag.String("output-filename", "", "the filename to write dnstap streams to ('-' means stdout)")
+	outputFilename := flag.String("output-file", "", "the file to write dnstap streams to ('-' means stdout)")
 	outputTCP := flag.String("output-tcp", "", "the target and port to write dnstap streams to, e.g. '127.0.0.1:5555'")
 	cryptoPanKey := flag.String("cryptopan-key", "", "override the secret used for Crypto-PAn anonymization")
 	cryptoPanKeySalt := flag.String("cryptopan-key-salt", "dta-kdf-salt-val", "the salt used for key derivation")
@@ -43,7 +43,7 @@ func main() {
 
 	// For now we only support a single output at a time
 	if *outputFilename != "" && *outputTCP != "" {
-		log.Fatal("flags -output-filename and -output-tcp are mutually exclusive, use only one")
+		log.Fatal("flags -output-file and -output-tcp are mutually exclusive, use only one")
 	}
 
 	conf, err := readConfig(*configFile)
@@ -94,7 +94,7 @@ func main() {
 			log.Fatal(err)
 		}
 	} else {
-		log.Fatal("must set -output-filename or -output-tcp")
+		log.Fatal("must set -output-file or -output-tcp")
 	}
 
 	// Enable logging for the selected output worker
