@@ -1,4 +1,4 @@
-module dta
+module dtm
 
 go 1.20
 

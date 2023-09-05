@@ -18,10 +18,10 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func readConfig(configFile string) (dtaConfig, error) {
-	conf := dtaConfig{}
+func readConfig(configFile string) (dtmConfig, error) {
+	conf := dtmConfig{}
 	if _, err := toml.DecodeFile(configFile, &conf); err != nil {
-		return dtaConfig{}, fmt.Errorf("readConfig: %w", err)
+		return dtmConfig{}, fmt.Errorf("readConfig: %w", err)
 	}
 
 	return conf, nil
@@ -31,13 +31,13 @@ func main() {
 
 	// Handle flags
 	debug := flag.Bool("debug", false, "print debug logging during operation")
-	configFile := flag.String("config", "dta.toml", "config file for sensitive information")
+	configFile := flag.String("config", "dtm.toml", "config file for sensitive information")
 	fileformat := flag.String("file-format", "json", "output format when writing to a file ('json' or 'fstrm')")
 	inputUnixSocketPath := flag.String("input-unix", "/var/lib/unbound/dnstap.sock", "create unix socket for reading dnstap")
 	outputFilename := flag.String("output-file", "", "the file to write dnstap streams to ('-' means stdout)")
 	outputTCP := flag.String("output-tcp", "", "the target and port to write dnstap streams to, e.g. '127.0.0.1:5555'")
-	cryptoPanKey := flag.String("cryptopan-key", "", "override the secret used for Crypto-PAn anonymization")
-	cryptoPanKeySalt := flag.String("cryptopan-key-salt", "dta-kdf-salt-val", "the salt used for key derivation")
+	cryptoPanKey := flag.String("cryptopan-key", "", "override the secret used for Crypto-PAn pseudonymization")
+	cryptoPanKeySalt := flag.String("cryptopan-key-salt", "dtm-kdf-salt-val", "the salt used for key derivation")
 	simpleRandomSamplingN := flag.Int("simple-random-sampling-n", 0, "only capture random 1-out-of-N dnstap messages, 0 disables sampling")
 	flag.Parse()
 
@@ -152,7 +152,7 @@ func main() {
 	<-dtf.done
 }
 
-type dtaConfig struct {
+type dtmConfig struct {
 	CryptoPanKey string `toml:"cryptopan-key"`
 }
 

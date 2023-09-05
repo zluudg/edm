@@ -1,19 +1,19 @@
 # dtm: dnstap(ir) minimiser
 ## About
-Tool for reading dnstap data, pseudo-anonymizing IP addresses and potentially sampling
+Tool for reading dnstap data, pseudonymizing IP addresses and potentially sampling
 1-out-of-N messages from the input stream if requested.
 
 Currently expects to read dnstap from a unix socket and can write the
-pseudo-anonymized output to either JSON-formatted text or raw framestream data that
+pseudonymized output to either JSON-formatted text or raw framestream data that
 can be read by other dnstap tools.
 ```
-Usage of ./dta:
+Usage of ./dtm:
   -config string
-    	config file for sensitive information (default "dta.toml")
+    	config file for sensitive information (default "dtm.toml")
   -cryptopan-key string
-    	override the secret used for Crypto-PAn pseudo-anonymization
+    	override the secret used for Crypto-PAn pseudonymization
   -cryptopan-key-salt string
-    	the salt used for key derivation (default "dta-kdf-salt-val")
+    	the salt used for key derivation (default "dtm-kdf-salt-val")
   -debug
     	print debug logging during operation
   -file-format string
@@ -32,7 +32,7 @@ Usage of ./dta:
 Using the tool requires the creation of a TOML config file for holding the
 crypto-PAn secret (by default the config is read from the current working directory)
 
-Basic usage, writing pseudo-anonymized json data to `stdout`:
+Basic usage, writing pseudonymized json data to `stdout`:
 ```
 echo 'cryptopan-key = "mysecret"' > dta.toml
 dta -input-unix /opt/unbound/dnstap.sock -output-file -
