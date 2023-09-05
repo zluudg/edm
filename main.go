@@ -160,7 +160,7 @@ type dnstapFilter struct {
 	inputChannel chan []byte          // the channel expected to be passed to dnstap ReadInto()
 	dnstapOutput dnstap.Output        // the dnstap.Output we send modified dnstap messages to
 	log          dnstap.Logger        // any information logging is sent here
-	cryptopan    *cryptopan.Cryptopan // used for anonymizing IP addresses
+	cryptopan    *cryptopan.Cryptopan // used for pseudonymizing IP addresses
 	stop         chan struct{}        // close this channel to gracefully stop runFilter()
 	done         chan struct{}        // block on this channel to make sure output is flushed before exiting
 	simpleSample int                  // only capture random 1-out-of-N dnstap messages and discard the rest, the value 0 disables sampling
@@ -211,7 +211,7 @@ filterLoop:
 			if dtf.debug {
 				dtf.log.Printf("dnstapFilter.runFilter: modifying dnstap message")
 			}
-			dtf.anonymizeDnstap(dt)
+			dtf.pseudonymizeDnstap(dt)
 
 			b, err := proto.Marshal(dt)
 			if err != nil {
@@ -230,7 +230,7 @@ filterLoop:
 }
 
 // Anonymize IP address fields in a dnstap message
-func (dtf *dnstapFilter) anonymizeDnstap(dt *dnstap.Dnstap) {
+func (dtf *dnstapFilter) pseudonymizeDnstap(dt *dnstap.Dnstap) {
 	dt.Message.QueryAddress = dtf.cryptopan.Anonymize(net.IP(dt.Message.QueryAddress))
 	dt.Message.ResponseAddress = dtf.cryptopan.Anonymize(net.IP(dt.Message.ResponseAddress))
 }
