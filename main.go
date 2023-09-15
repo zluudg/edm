@@ -4,15 +4,24 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"math/rand"
 	"net"
 	"os"
 	"os/signal"
+	"slices"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/apache/arrow/go/v13/arrow"
+	"github.com/apache/arrow/go/v13/arrow/array"
+	"github.com/apache/arrow/go/v13/arrow/memory"
+	"github.com/apache/arrow/go/v13/parquet/pqarrow"
 	dnstap "github.com/dnstap/golang-dnstap"
+	"github.com/miekg/dns"
 	"github.com/yawning/cryptopan"
 	"golang.org/x/crypto/argon2"
 	"google.golang.org/protobuf/proto"
@@ -23,7 +32,6 @@ func readConfig(configFile string) (dtmConfig, error) {
 	if _, err := toml.DecodeFile(configFile, &conf); err != nil {
 		return dtmConfig{}, fmt.Errorf("readConfig: %w", err)
 	}
-
 	return conf, nil
 }
 
@@ -43,16 +51,19 @@ func main() {
 
 	// For now we only support a single output at a time
 	if *outputFilename != "" && *outputTCP != "" {
-		log.Fatal("flags -output-file and -output-tcp are mutually exclusive, use only one")
+		slog.Error("flags -output-file and -output-tcp are mutually exclusive, use only one")
+		os.Exit(1)
 	}
 
 	conf, err := readConfig(*configFile)
 	if err != nil {
-		log.Fatal(err)
+		slog.Error(err.Error())
+		os.Exit(1)
 	}
 
 	if conf.CryptoPanKey == "" {
-		log.Fatalf("missing required setting 'cryptopan-key' in %s", *configFile)
+		slog.Error(fmt.Sprintf("missing required setting 'cryptopan-key' in %s", *configFile))
+		os.Exit(1)
 	}
 
 	// While we require setting the Crypto-PAn key in the config file it can be
@@ -63,7 +74,11 @@ func main() {
 
 	// Logger used for the different background workers, logged to stderr
 	// so stdout only includes dnstap data if anything.
-	logger := log.New(os.Stderr, "", log.LstdFlags)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+	// This makes any calls to the standard "log" package to use slog as
+	// well
+	slog.SetDefault(logger)
 
 	// Configure the selected output writer
 	var dnstapOutput dnstap.Output
@@ -73,36 +88,43 @@ func main() {
 		case "fstrm":
 			dnstapOutput, err = dnstap.NewFrameStreamOutputFromFilename(*outputFilename)
 			if err != nil {
-				log.Fatal(err)
+				slog.Error(err.Error())
+				os.Exit(1)
 			}
 		case "json":
 			dnstapOutput, err = dnstap.NewTextOutputFromFilename(*outputFilename, dnstap.JSONFormat, false)
 			if err != nil {
-				log.Fatal(err)
+				slog.Error(err.Error())
+				os.Exit(1)
 			}
 		default:
-			log.Fatal("-file-format must be 'fstrm' or 'json'")
+			slog.Error("-file-format must be 'fstrm' or 'json'")
+			os.Exit(1)
 		}
 	} else if *outputTCP != "" {
 		var naddr net.Addr
 		naddr, err := net.ResolveTCPAddr("tcp", *outputTCP)
 		if err != nil {
-			log.Fatal(err)
+			slog.Error(err.Error())
+			os.Exit(1)
 		}
 		dnstapOutput, err = dnstap.NewFrameStreamSockOutput(naddr)
 		if err != nil {
-			log.Fatal(err)
+			slog.Error(err.Error())
+			os.Exit(1)
 		}
 	} else {
-		log.Fatal("must set -output-file or -output-tcp")
+		slog.Error("must set -output-file or -output-tcp")
+		os.Exit(1)
 	}
 
-	// Enable logging for the selected output worker
+	// Enable logging for the selected output worker, we depend on
+	// slog.SetDefault above to get structed logging.
 	switch v := dnstapOutput.(type) {
 	case *dnstap.FrameStreamOutput:
-		v.SetLogger(logger)
+		v.SetLogger(log.Default())
 	case *dnstap.TextOutput:
-		v.SetLogger(logger)
+		v.SetLogger(log.Default())
 	}
 
 	// Create a 32 byte length secret based on the supplied -crypto-pan key,
@@ -115,19 +137,26 @@ func main() {
 	var aesKeyLen uint32 = 32
 	aesKey := argon2.IDKey([]byte(conf.CryptoPanKey), []byte(*cryptoPanKeySalt), 1, 64*1024, 4, aesKeyLen)
 
+	dnsSessionBlockSchema := dnsSessionBlockArrowSchema()
+	fmt.Println(dnsSessionBlockSchema)
+
+	arrowPool := memory.NewGoAllocator()
+
 	// Create an instance of the filter
-	dtf, err := newDnstapFilter(logger, dnstapOutput, aesKey, *simpleRandomSamplingN, *debug)
+	dtf, err := newDnstapFilter(log.Default(), dnstapOutput, aesKey, *simpleRandomSamplingN, *debug)
 	if err != nil {
-		log.Fatal(err)
+		slog.Error(err.Error())
+		os.Exit(1)
 	}
 
 	// Setup the unix socket dnstap.Input
 	dti, err := dnstap.NewFrameStreamSockInputFromPath(*inputUnixSocketPath)
 	if err != nil {
-		log.Fatal(err)
+		slog.Error(err.Error())
+		os.Exit(1)
 	}
 	dti.SetTimeout(time.Second * 5)
-	dti.SetLogger(logger)
+	dti.SetLogger(log.Default())
 
 	// Exit gracefully on SIGINT or SIGTERM
 	go func() {
@@ -139,8 +168,11 @@ func main() {
 		close(dtf.stop)
 	}()
 
+	dnsSessionBlockBuilder := array.NewRecordBuilder(arrowPool, dnsSessionBlockSchema)
+	defer dnsSessionBlockBuilder.Release()
+
 	// Start filter
-	go dtf.runFilter()
+	go dtf.runFilter(arrowPool, dnsSessionBlockSchema, dnsSessionBlockBuilder)
 
 	// Start dnstap.Output
 	go dnstapOutput.RunOutputLoop()
@@ -188,8 +220,52 @@ func newDnstapFilter(logger dnstap.Logger, dnstapOutput dnstap.Output, cryptoPan
 // runFilter reads frames from the inputChannel, doing any modifications and
 // then passes them on to a dnstap.Output. To gracefully stop
 // runFilter() you need to close the dtf.stop channel.
-func (dtf *dnstapFilter) runFilter() {
+func (dtf *dnstapFilter) runFilter(arrowPool *memory.GoAllocator, arrowSchema *arrow.Schema, dnsSessionBlockBuilder *array.RecordBuilder) {
 	dt := &dnstap.Dnstap{}
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	//   fields: 3
+	// - start_time: type=timestamp[ns, tz=UTC]
+	// - stop_time: type=timestamp[ns, tz=UTC]
+	// - sessions: type=list<item: struct<label0: binary, label1: binary, label2: binary, label3: binary, label4: binary, label5: binary, label6: binary, label7: binary, label8: binary, label9: binary, query_count: uint64>, nullable> <nil>
+
+	dnsSessionRowListBuilder := dnsSessionBlockBuilder.Field(2).(*array.ListBuilder)
+	defer dnsSessionRowListBuilder.Release()
+
+	dnsSessionRowStructBuilder := dnsSessionRowListBuilder.ValueBuilder().(*array.StructBuilder)
+	dnsSessionRowListBuilder.Append(true)
+
+	label0 := dnsSessionRowStructBuilder.FieldBuilder(0).(*array.StringBuilder)
+	defer label0.Release()
+	label1 := dnsSessionRowStructBuilder.FieldBuilder(1).(*array.StringBuilder)
+	defer label1.Release()
+	label2 := dnsSessionRowStructBuilder.FieldBuilder(2).(*array.StringBuilder)
+	defer label1.Release()
+	label3 := dnsSessionRowStructBuilder.FieldBuilder(3).(*array.StringBuilder)
+	defer label3.Release()
+	label4 := dnsSessionRowStructBuilder.FieldBuilder(4).(*array.StringBuilder)
+	defer label4.Release()
+	label5 := dnsSessionRowStructBuilder.FieldBuilder(5).(*array.StringBuilder)
+	defer label5.Release()
+	label6 := dnsSessionRowStructBuilder.FieldBuilder(6).(*array.StringBuilder)
+	defer label6.Release()
+	label7 := dnsSessionRowStructBuilder.FieldBuilder(7).(*array.StringBuilder)
+	defer label7.Release()
+	label8 := dnsSessionRowStructBuilder.FieldBuilder(8).(*array.StringBuilder)
+	defer label8.Release()
+	label9 := dnsSessionRowStructBuilder.FieldBuilder(9).(*array.StringBuilder)
+	defer label9.Release()
+
+	// Store labels in a slice so we can reference them by index
+	labelSlice := []*array.StringBuilder{label0, label1, label2, label3, label4, label5, label6, label7, label8, label9}
+	lastLabelOffset := len(labelSlice) - 1
+
+	var start_time time.Time
+	var stop_time time.Time
+
+	var queryAddress, responseAddress string
+
 filterLoop:
 	for {
 		select {
@@ -213,12 +289,197 @@ filterLoop:
 			}
 			dtf.pseudonymizeDnstap(dt)
 
+			msg := new(dns.Msg)
+
+			// For cases where we were unable to unpack the DNS message we
+			// skip parsing.
+			if msg == nil || len(msg.Question) == 0 {
+				dtf.log.Printf("unable to parse dnstap message, or no question section, skipping parsing")
+				continue
+			}
+
+			if _, ok := dns.IsDomainName(msg.Question[0].Name); !ok {
+				dtf.log.Printf("unable to parse question name, skipping parsing")
+				continue
+			}
+
+			isQuery := strings.HasSuffix(dnstap.Message_Type_name[int32(*dt.Message.Type)], "_QUERY")
+
+			var t time.Time
+			var err error
+
+			qa := net.IP(dt.Message.QueryAddress)
+			ra := net.IP(dt.Message.ResponseAddress)
+
+			// Query address: 10.10.10.10:31337 or ?
+			if qa != nil {
+				queryAddress = qa.String() + ":" + strconv.FormatUint(uint64(*dt.Message.QueryPort), 10)
+			} else {
+				queryAddress = "?"
+			}
+
+			// Response address: 10.10.10.10:31337 or ?
+			if ra != nil {
+				responseAddress = ra.String() + ":" + strconv.FormatUint(uint64(*dt.Message.ResponsePort), 10)
+			} else {
+				responseAddress = "?"
+			}
+
+			if isQuery {
+				err = msg.Unpack(dt.Message.QueryMessage)
+				if err != nil {
+					log.Printf("unable to unpack query message (%s -> %s): %s", queryAddress, responseAddress, err)
+					msg = nil
+				}
+				t = time.Unix(int64(*dt.Message.QueryTimeSec), int64(*dt.Message.QueryTimeNsec))
+			} else {
+				err = msg.Unpack(dt.Message.ResponseMessage)
+				if err != nil {
+					log.Printf("unable to unpack response message (%s <- %s): %s", queryAddress, responseAddress, err)
+					msg = nil
+				}
+				t = time.Unix(int64(*dt.Message.ResponseTimeSec), int64(*dt.Message.ResponseTimeNsec))
+			}
+
+			// Only update start_time for the first packet we see
+			if start_time.IsZero() {
+				start_time = t
+			}
+
+			// Update stop_time for every packet we see
+			stop_time = t
+
+			// Store the labels in reverse order (example.com ->
+			// ["com", "example"] to map to label0 being the TLD
+			labels := dns.SplitDomainName(msg.Question[0].Name)
+
+			dnsSessionRowStructBuilder.Append(true)
+			//label0.Append("com")
+			//label1.AppendStringValues([]string{"google"}, nil)
+
+			// labels is nil if this is the root domain (.)
+			if labels == nil {
+				fmt.Println("setting all labels to null")
+				for _, arrowLabel := range labelSlice {
+					arrowLabel.AppendNull()
+				}
+			} else {
+				// Since arrow label0-label9 is the reverse
+				// order from our dns labels we need to map the
+				// last dns label to label0, the second last to
+				// label1 etc.
+				//
+				// Also, we only store up to the ninth label
+				// (label8) separately, after that the
+				// remainder goes in the tenth label (label9)
+				var leftMostLabel int
+				if len(labels) > lastLabelOffset {
+					leftMostLabel = len(labels) - lastLabelOffset
+				} else {
+					leftMostLabel = 0
+				}
+
+				dtf.log.Printf("leftMostLabel: ", leftMostLabel)
+
+				// Iterate backwards over the labels in dnstap
+				// packet, and iterate forward over the arrow
+				// label0-9 fields
+				arrowLabelIndex := 0
+				for i := len(labels) - 1; i >= leftMostLabel; i-- {
+					fmt.Printf("setting label%d to %s (%d)\n", arrowLabelIndex, labels[i], i)
+					labelSlice[arrowLabelIndex].Append(labels[i])
+					arrowLabelIndex++
+				}
+
+				if leftMostLabel > 0 {
+					// There remains labels that did not fit
+					// in label0-label8, insert the rest of
+					// them in label9
+					remainderSlice := labels[0:leftMostLabel]
+
+					// We store the labels backwards to match label0-label8
+					slices.Reverse(remainderSlice)
+					dtf.log.Printf("setting label%d to remainderSlice to %s\n", lastLabelOffset, remainderSlice)
+					labelSlice[lastLabelOffset].Append(strings.Join(remainderSlice, "."))
+				} else {
+					// We managed to fit all labels inside
+					// label0-8, fill out any remaining
+					// labelX fields with null
+					for i := arrowLabelIndex; i <= lastLabelOffset; i++ {
+						fmt.Printf("setting remaining label%d to null\n", i)
+						labelSlice[i].AppendNull()
+					}
+				}
+			}
+
 			b, err := proto.Marshal(dt)
 			if err != nil {
 				dtf.log.Printf("dnstapFilter.runFilter: proto.Marshal() failed: %s, returning", err)
 				break filterLoop
 			}
 			dtf.dnstapOutput.GetOutputChannel() <- b
+		case <-ticker.C:
+			if start_time.IsZero() {
+				dtf.log.Printf("no start_time seen, we have not received any dnstap frames, printing nothing")
+				continue
+			}
+			outFileName := "/tmp/dns_session_block.parquet"
+			dtf.log.Printf("writing out parquet file %s", outFileName)
+			outFile, err := os.Create(outFileName)
+			if err != nil {
+				dtf.log.Printf("unable to open %s", outFileName)
+			}
+			defer outFile.Close()
+			parquetWriter, err := pqarrow.NewFileWriter(arrowSchema, outFile, nil, pqarrow.DefaultWriterProps())
+			if err != nil {
+				dtf.log.Printf("unable to create parquet writer: %w", err)
+			}
+			dtf.log.Printf("setting start_time")
+			arrowTimeStart, err := arrow.TimestampFromTime(start_time, arrow.Nanosecond)
+			if err != nil {
+				dtf.log.Printf("unable to parse start_time: %w", err)
+				continue
+			}
+			dnsSessionBlockBuilder.Field(0).(*array.TimestampBuilder).AppendValues([]arrow.Timestamp{arrowTimeStart}, nil)
+			arrowTimeStop, err := arrow.TimestampFromTime(stop_time, arrow.Nanosecond)
+			if err != nil {
+				dtf.log.Printf("unable to parse stop_time: %w", err)
+				continue
+			}
+
+			dtf.log.Printf("setting stop_time")
+			dnsSessionBlockBuilder.Field(1).(*array.TimestampBuilder).AppendValues([]arrow.Timestamp{arrowTimeStop}, nil)
+
+			dtf.log.Printf("creating record")
+			rec1 := dnsSessionBlockBuilder.NewRecord()
+			defer rec1.Release()
+
+			err = parquetWriter.Write(rec1)
+			if err != nil {
+				dtf.log.Printf("unable to write parquet file: %w", err)
+			}
+			err = parquetWriter.Close()
+			if err != nil {
+				dtf.log.Printf("unable to close parquet file: %w", err)
+			}
+
+			jsonBytes, err := rec1.MarshalJSON()
+			if err != nil {
+				fmt.Println("error marshalling json fron rec")
+				continue
+			}
+			fmt.Println(string(jsonBytes))
+
+			dtf.log.Printf("creating table")
+			tbl := array.NewTableFromRecords(dnsSessionBlockArrowSchema(), []arrow.Record{rec1})
+			defer tbl.Release()
+
+			// Prepare for next iteration
+			dtf.log.Printf("appending new list")
+			dnsSessionRowListBuilder.Append(true)
+			dtf.log.Printf("resetting start time")
+			start_time = time.Time{}
+
 		case <-dtf.stop:
 			break filterLoop
 		}
