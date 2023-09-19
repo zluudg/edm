@@ -137,8 +137,8 @@ func main() {
 	var aesKeyLen uint32 = 32
 	aesKey := argon2.IDKey([]byte(conf.CryptoPanKey), []byte(*cryptoPanKeySalt), 1, 64*1024, 4, aesKeyLen)
 
-	dnsSessionBlockSchema := dnsSessionBlockArrowSchema()
-	fmt.Println(dnsSessionBlockSchema)
+	dnsSessionRowSchema := dnsSessionRowArrowSchema()
+	fmt.Println(dnsSessionRowSchema)
 
 	arrowPool := memory.NewGoAllocator()
 
@@ -168,11 +168,11 @@ func main() {
 		close(dtf.stop)
 	}()
 
-	dnsSessionBlockBuilder := array.NewRecordBuilder(arrowPool, dnsSessionBlockSchema)
-	defer dnsSessionBlockBuilder.Release()
+	dnsSessionRowBuilder := array.NewRecordBuilder(arrowPool, dnsSessionRowSchema)
+	defer dnsSessionRowBuilder.Release()
 
 	// Start filter
-	go dtf.runFilter(arrowPool, dnsSessionBlockSchema, dnsSessionBlockBuilder)
+	go dtf.runFilter(arrowPool, dnsSessionRowSchema, dnsSessionRowBuilder)
 
 	// Start dnstap.Output
 	go dnstapOutput.RunOutputLoop()
@@ -220,7 +220,7 @@ func newDnstapFilter(logger dnstap.Logger, dnstapOutput dnstap.Output, cryptoPan
 // runFilter reads frames from the inputChannel, doing any modifications and
 // then passes them on to a dnstap.Output. To gracefully stop
 // runFilter() you need to close the dtf.stop channel.
-func (dtf *dnstapFilter) runFilter(arrowPool *memory.GoAllocator, arrowSchema *arrow.Schema, dnsSessionBlockBuilder *array.RecordBuilder) {
+func (dtf *dnstapFilter) runFilter(arrowPool *memory.GoAllocator, arrowSchema *arrow.Schema, dnsSessionRowBuilder *array.RecordBuilder) {
 	dt := &dnstap.Dnstap{}
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -230,39 +230,33 @@ func (dtf *dnstapFilter) runFilter(arrowPool *memory.GoAllocator, arrowSchema *a
 	// - stop_time: type=timestamp[ns, tz=UTC]
 	// - sessions: type=list<item: struct<label0: binary, label1: binary, label2: binary, label3: binary, label4: binary, label5: binary, label6: binary, label7: binary, label8: binary, label9: binary, query_count: uint64>, nullable> <nil>
 
-	dnsSessionRowListBuilder := dnsSessionBlockBuilder.Field(2).(*array.ListBuilder)
-	defer dnsSessionRowListBuilder.Release()
-
-	dnsSessionRowStructBuilder := dnsSessionRowListBuilder.ValueBuilder().(*array.StructBuilder)
-	dnsSessionRowListBuilder.Append(true)
-
-	label0 := dnsSessionRowStructBuilder.FieldBuilder(0).(*array.StringBuilder)
+	label0 := dnsSessionRowBuilder.Field(0).(*array.StringBuilder)
 	defer label0.Release()
-	label1 := dnsSessionRowStructBuilder.FieldBuilder(1).(*array.StringBuilder)
+	label1 := dnsSessionRowBuilder.Field(1).(*array.StringBuilder)
 	defer label1.Release()
-	label2 := dnsSessionRowStructBuilder.FieldBuilder(2).(*array.StringBuilder)
+	label2 := dnsSessionRowBuilder.Field(2).(*array.StringBuilder)
 	defer label1.Release()
-	label3 := dnsSessionRowStructBuilder.FieldBuilder(3).(*array.StringBuilder)
+	label3 := dnsSessionRowBuilder.Field(3).(*array.StringBuilder)
 	defer label3.Release()
-	label4 := dnsSessionRowStructBuilder.FieldBuilder(4).(*array.StringBuilder)
+	label4 := dnsSessionRowBuilder.Field(4).(*array.StringBuilder)
 	defer label4.Release()
-	label5 := dnsSessionRowStructBuilder.FieldBuilder(5).(*array.StringBuilder)
+	label5 := dnsSessionRowBuilder.Field(5).(*array.StringBuilder)
 	defer label5.Release()
-	label6 := dnsSessionRowStructBuilder.FieldBuilder(6).(*array.StringBuilder)
+	label6 := dnsSessionRowBuilder.Field(6).(*array.StringBuilder)
 	defer label6.Release()
-	label7 := dnsSessionRowStructBuilder.FieldBuilder(7).(*array.StringBuilder)
+	label7 := dnsSessionRowBuilder.Field(7).(*array.StringBuilder)
 	defer label7.Release()
-	label8 := dnsSessionRowStructBuilder.FieldBuilder(8).(*array.StringBuilder)
+	label8 := dnsSessionRowBuilder.Field(8).(*array.StringBuilder)
 	defer label8.Release()
-	label9 := dnsSessionRowStructBuilder.FieldBuilder(9).(*array.StringBuilder)
+	label9 := dnsSessionRowBuilder.Field(9).(*array.StringBuilder)
 	defer label9.Release()
 
 	// Store labels in a slice so we can reference them by index
 	labelSlice := []*array.StringBuilder{label0, label1, label2, label3, label4, label5, label6, label7, label8, label9}
 	lastLabelOffset := len(labelSlice) - 1
 
-	var start_time time.Time
-	var stop_time time.Time
+	// Keep track of if we have recorded any dnstap packets or not at rotation time
+	var dnstap_seen bool
 
 	var queryAddress, responseAddress string
 
@@ -291,9 +285,11 @@ filterLoop:
 
 			msg := new(dns.Msg)
 
+			dnstap_seen = true
+
 			isQuery := strings.HasSuffix(dnstap.Message_Type_name[int32(*dt.Message.Type)], "_QUERY")
 
-			var t time.Time
+			//var t time.Time
 			var err error
 
 			qa := net.IP(dt.Message.QueryAddress)
@@ -319,14 +315,14 @@ filterLoop:
 					log.Printf("unable to unpack query message (%s -> %s): %s", queryAddress, responseAddress, err)
 					msg = nil
 				}
-				t = time.Unix(int64(*dt.Message.QueryTimeSec), int64(*dt.Message.QueryTimeNsec))
+				//t = time.Unix(int64(*dt.Message.QueryTimeSec), int64(*dt.Message.QueryTimeNsec))
 			} else {
 				err = msg.Unpack(dt.Message.ResponseMessage)
 				if err != nil {
 					log.Printf("unable to unpack response message (%s <- %s): %s", queryAddress, responseAddress, err)
 					msg = nil
 				}
-				t = time.Unix(int64(*dt.Message.ResponseTimeSec), int64(*dt.Message.ResponseTimeNsec))
+				//t = time.Unix(int64(*dt.Message.ResponseTimeSec), int64(*dt.Message.ResponseTimeNsec))
 			}
 
 			// For cases where we were unable to unpack the DNS message we
@@ -342,18 +338,17 @@ filterLoop:
 			}
 
 			// Only update start_time for the first packet we see
-			if start_time.IsZero() {
-				start_time = t
-			}
+			//if start_time.IsZero() {
+			//	start_time = t
+			//}
 
 			// Update stop_time for every packet we see
-			stop_time = t
+			//stop_time = t
 
 			// Store the labels in reverse order (example.com ->
 			// ["com", "example"] to map to label0 being the TLD
 			labels := dns.SplitDomainName(msg.Question[0].Name)
 
-			dnsSessionRowStructBuilder.Append(true)
 			//label0.Append("com")
 			//label1.AppendStringValues([]string{"google"}, nil)
 
@@ -419,8 +414,8 @@ filterLoop:
 			}
 			dtf.dnstapOutput.GetOutputChannel() <- b
 		case <-ticker.C:
-			if start_time.IsZero() {
-				dtf.log.Printf("no start_time seen, we have not received any dnstap frames, printing nothing")
+			if !dnstap_seen {
+				dtf.log.Printf("no dnstap seen, we have not received any dnstap frames, printing nothing")
 				continue
 			}
 			outFileName := "/tmp/dns_session_block.parquet"
@@ -434,24 +429,8 @@ filterLoop:
 			if err != nil {
 				dtf.log.Printf("unable to create parquet writer: %w", err)
 			}
-			dtf.log.Printf("setting start_time")
-			arrowTimeStart, err := arrow.TimestampFromTime(start_time, arrow.Nanosecond)
-			if err != nil {
-				dtf.log.Printf("unable to parse start_time: %w", err)
-				continue
-			}
-			dnsSessionBlockBuilder.Field(0).(*array.TimestampBuilder).AppendValues([]arrow.Timestamp{arrowTimeStart}, nil)
-			arrowTimeStop, err := arrow.TimestampFromTime(stop_time, arrow.Nanosecond)
-			if err != nil {
-				dtf.log.Printf("unable to parse stop_time: %w", err)
-				continue
-			}
 
-			dtf.log.Printf("setting stop_time")
-			dnsSessionBlockBuilder.Field(1).(*array.TimestampBuilder).AppendValues([]arrow.Timestamp{arrowTimeStop}, nil)
-
-			dtf.log.Printf("creating record")
-			rec1 := dnsSessionBlockBuilder.NewRecord()
+			rec1 := dnsSessionRowBuilder.NewRecord()
 			defer rec1.Release()
 
 			err = parquetWriter.Write(rec1)
@@ -471,14 +450,11 @@ filterLoop:
 			fmt.Println(string(jsonBytes))
 
 			dtf.log.Printf("creating table")
-			tbl := array.NewTableFromRecords(dnsSessionBlockArrowSchema(), []arrow.Record{rec1})
+			tbl := array.NewTableFromRecords(dnsSessionRowArrowSchema(), []arrow.Record{rec1})
 			defer tbl.Release()
 
 			// Prepare for next iteration
-			dtf.log.Printf("appending new list")
-			dnsSessionRowListBuilder.Append(true)
-			dtf.log.Printf("resetting start time")
-			start_time = time.Time{}
+			dnstap_seen = false
 
 		case <-dtf.stop:
 			break filterLoop

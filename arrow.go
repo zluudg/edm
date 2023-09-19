@@ -23,27 +23,14 @@ func createLabelFields() []arrow.Field {
 	return arrowFields
 }
 
-func dnsSessionRowFields() []arrow.Field {
+func dnsSessionRowArrowSchema() *arrow.Schema {
 	arrowFields := []arrow.Field{}
 
 	// FQDN as key
 	arrowFields = append(arrowFields, createLabelFields()...)
 
-	return arrowFields
-}
-
-func dnsSessionBlockArrowSchema() *arrow.Schema {
-
-	arrowFields := []arrow.Field{}
-
-	arrowFields = append(arrowFields, arrow.Field{Name: "start_time", Type: arrow.FixedWidthTypes.Timestamp_ns})
-	arrowFields = append(arrowFields, arrow.Field{Name: "stop_time", Type: arrow.FixedWidthTypes.Timestamp_ns})
-	arrowFields = append(arrowFields, arrow.Field{Name: "sessions", Type: arrow.ListOf(arrow.StructOf(dnsSessionRowFields()...))})
-
-	arrowSchema := arrow.NewSchema(
+	return arrow.NewSchema(
 		arrowFields,
 		nil,
 	)
-
-	return arrowSchema
 }
