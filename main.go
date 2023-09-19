@@ -291,18 +291,6 @@ filterLoop:
 
 			msg := new(dns.Msg)
 
-			// For cases where we were unable to unpack the DNS message we
-			// skip parsing.
-			if msg == nil || len(msg.Question) == 0 {
-				dtf.log.Printf("unable to parse dnstap message, or no question section, skipping parsing")
-				continue
-			}
-
-			if _, ok := dns.IsDomainName(msg.Question[0].Name); !ok {
-				dtf.log.Printf("unable to parse question name, skipping parsing")
-				continue
-			}
-
 			isQuery := strings.HasSuffix(dnstap.Message_Type_name[int32(*dt.Message.Type)], "_QUERY")
 
 			var t time.Time
@@ -339,6 +327,18 @@ filterLoop:
 					msg = nil
 				}
 				t = time.Unix(int64(*dt.Message.ResponseTimeSec), int64(*dt.Message.ResponseTimeNsec))
+			}
+
+			// For cases where we were unable to unpack the DNS message we
+			// skip parsing.
+			if msg == nil || len(msg.Question) == 0 {
+				dtf.log.Printf("unable to parse dnstap message, or no question section, skipping parsing")
+				continue
+			}
+
+			if _, ok := dns.IsDomainName(msg.Question[0].Name); !ok {
+				dtf.log.Printf("unable to parse question name, skipping parsing")
+				continue
 			}
 
 			// Only update start_time for the first packet we see
