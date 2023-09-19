@@ -408,40 +408,14 @@ filterLoop:
 				dtf.log.Printf("no dnstap seen, we have not received any dnstap frames, printing nothing")
 				continue
 			}
-			outFileName := "/tmp/dns_session_block.parquet"
-			dtf.log.Printf("writing out parquet file %s", outFileName)
-			outFile, err := os.Create(outFileName)
-			if err != nil {
-				dtf.log.Printf("unable to open %s", outFileName)
-			}
-			defer outFile.Close()
-			parquetWriter, err := pqarrow.NewFileWriter(arrowSchema, outFile, nil, pqarrow.DefaultWriterProps())
-			if err != nil {
-				dtf.log.Printf("unable to create parquet writer: %w", err)
-			}
-
-			rec1 := dnsSessionRowBuilder.NewRecord()
-			defer rec1.Release()
-
-			err = parquetWriter.Write(rec1)
-			if err != nil {
-				dtf.log.Printf("unable to write parquet file: %w", err)
-			}
-			err = parquetWriter.Close()
-			if err != nil {
-				dtf.log.Printf("unable to close parquet file: %w", err)
-			}
-
-			jsonBytes, err := rec1.MarshalJSON()
-			if err != nil {
-				fmt.Println("error marshalling json fron rec")
-				continue
-			}
-			fmt.Println(string(jsonBytes))
 
 			// Prepare for next collection phase
 			dnstap_seen = false
 
+			err := writeParquet(dtf, arrowSchema, dnsSessionRowBuilder)
+			if err != nil {
+				continue
+			}
 		case <-dtf.stop:
 			break filterLoop
 		}
@@ -450,6 +424,40 @@ filterLoop:
 	dtf.dnstapOutput.Close()
 	// Signal main() that we are done and ready to exit
 	close(dtf.done)
+}
+
+func writeParquet(dtf *dnstapFilter, arrowSchema *arrow.Schema, dnsSessionRowBuilder *array.RecordBuilder) error {
+	outFileName := "/tmp/dns_session_block.parquet"
+	dtf.log.Printf("writing out parquet file %s", outFileName)
+	outFile, err := os.Create(outFileName)
+	if err != nil {
+		dtf.log.Printf("unable to open %s", outFileName)
+	}
+	defer outFile.Close()
+	parquetWriter, err := pqarrow.NewFileWriter(arrowSchema, outFile, nil, pqarrow.DefaultWriterProps())
+	if err != nil {
+		dtf.log.Printf("unable to create parquet writer: %w", err)
+	}
+
+	rec1 := dnsSessionRowBuilder.NewRecord()
+	defer rec1.Release()
+
+	err = parquetWriter.Write(rec1)
+	if err != nil {
+		return fmt.Errorf("unable to write parquet file: %w", err)
+	}
+	err = parquetWriter.Close()
+	if err != nil {
+		return fmt.Errorf("unable to close parquet file: %w", err)
+	}
+
+	jsonBytes, err := rec1.MarshalJSON()
+	if err != nil {
+		return fmt.Errorf("error marshalling json fron rec: %w", err)
+	}
+	fmt.Println(string(jsonBytes))
+
+	return nil
 }
 
 // Anonymize IP address fields in a dnstap message
