@@ -273,19 +273,19 @@ filterLoop:
 				break filterLoop
 			}
 
-			if dtf.debug {
-				dtf.log.Printf("dnstapFilter.runFilter: modifying dnstap message")
-			}
-			dtf.pseudonymizeDnstap(dt)
-
-			msg := new(dns.Msg)
-
 			isQuery := strings.HasSuffix(dnstap.Message_Type_name[int32(*dt.Message.Type)], "_QUERY")
 
 			// For now we only care about response type dnstap packets
 			if isQuery {
 				continue
 			}
+
+			if dtf.debug {
+				dtf.log.Printf("dnstapFilter.runFilter: modifying dnstap message")
+			}
+			dtf.pseudonymizeDnstap(dt)
+
+			msg := new(dns.Msg)
 
 			//var t time.Time
 			var err error
