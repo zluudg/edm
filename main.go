@@ -225,11 +225,6 @@ func (dtf *dnstapFilter) runFilter(arrowPool *memory.GoAllocator, arrowSchema *a
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
-	//   fields: 3
-	// - start_time: type=timestamp[ns, tz=UTC]
-	// - stop_time: type=timestamp[ns, tz=UTC]
-	// - sessions: type=list<item: struct<label0: binary, label1: binary, label2: binary, label3: binary, label4: binary, label5: binary, label6: binary, label7: binary, label8: binary, label9: binary, query_count: uint64>, nullable> <nil>
-
 	label0 := dnsSessionRowBuilder.Field(0).(*array.StringBuilder)
 	defer label0.Release()
 	label1 := dnsSessionRowBuilder.Field(1).(*array.StringBuilder)
@@ -337,20 +332,9 @@ filterLoop:
 				continue
 			}
 
-			// Only update start_time for the first packet we see
-			//if start_time.IsZero() {
-			//	start_time = t
-			//}
-
-			// Update stop_time for every packet we see
-			//stop_time = t
-
 			// Store the labels in reverse order (example.com ->
 			// ["com", "example"] to map to label0 being the TLD
 			labels := dns.SplitDomainName(msg.Question[0].Name)
-
-			//label0.Append("com")
-			//label1.AppendStringValues([]string{"google"}, nil)
 
 			// labels is nil if this is the root domain (.)
 			if labels == nil {
