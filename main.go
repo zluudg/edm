@@ -280,9 +280,12 @@ filterLoop:
 
 			msg := new(dns.Msg)
 
-			dnstap_seen = true
-
 			isQuery := strings.HasSuffix(dnstap.Message_Type_name[int32(*dt.Message.Type)], "_QUERY")
+
+			// For now we only care about response type dnstap packets
+			if isQuery {
+				continue
+			}
 
 			//var t time.Time
 			var err error
@@ -397,6 +400,9 @@ filterLoop:
 				break filterLoop
 			}
 			dtf.dnstapOutput.GetOutputChannel() <- b
+
+			dnstap_seen = true
+
 		case <-ticker.C:
 			if !dnstap_seen {
 				dtf.log.Printf("no dnstap seen, we have not received any dnstap frames, printing nothing")
