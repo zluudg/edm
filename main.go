@@ -439,11 +439,7 @@ filterLoop:
 			}
 			fmt.Println(string(jsonBytes))
 
-			dtf.log.Printf("creating table")
-			tbl := array.NewTableFromRecords(dnsSessionRowArrowSchema(), []arrow.Record{rec1})
-			defer tbl.Release()
-
-			// Prepare for next iteration
+			// Prepare for next collection phase
 			dnstap_seen = false
 
 		case <-dtf.stop:
