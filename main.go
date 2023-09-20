@@ -221,6 +221,7 @@ func (dtf *dnstapFilter) runFilter(arrowPool *memory.GoAllocator, arrowSchema *a
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
+	// Labels
 	label0 := dnsSessionRowBuilder.Field(0).(*array.StringBuilder)
 	defer label0.Release()
 	label1 := dnsSessionRowBuilder.Field(1).(*array.StringBuilder)
@@ -241,6 +242,12 @@ func (dtf *dnstapFilter) runFilter(arrowPool *memory.GoAllocator, arrowSchema *a
 	defer label8.Release()
 	label9 := dnsSessionRowBuilder.Field(9).(*array.StringBuilder)
 	defer label9.Release()
+
+	// Timestamps
+	queryTime := dnsSessionRowBuilder.Field(10).(*array.TimestampBuilder)
+	defer queryTime.Release()
+	responseTime := dnsSessionRowBuilder.Field(11).(*array.TimestampBuilder)
+	defer responseTime.Release()
 
 	// Store labels in a slice so we can reference them by index
 	labelSlice := []*array.StringBuilder{label0, label1, label2, label3, label4, label5, label6, label7, label8, label9}
@@ -274,7 +281,7 @@ filterLoop:
 
 			msg := new(dns.Msg)
 
-			//var t time.Time
+			var t time.Time
 			var err error
 
 			qa := net.IP(dt.Message.QueryAddress)
@@ -300,14 +307,14 @@ filterLoop:
 					log.Printf("unable to unpack query message (%s -> %s): %s", queryAddress, responseAddress, err)
 					msg = nil
 				}
-				//t = time.Unix(int64(*dt.Message.QueryTimeSec), int64(*dt.Message.QueryTimeNsec))
+				t = time.Unix(int64(*dt.Message.QueryTimeSec), int64(*dt.Message.QueryTimeNsec))
 			} else {
 				err = msg.Unpack(dt.Message.ResponseMessage)
 				if err != nil {
 					log.Printf("unable to unpack response message (%s <- %s): %s", queryAddress, responseAddress, err)
 					msg = nil
 				}
-				//t = time.Unix(int64(*dt.Message.ResponseTimeSec), int64(*dt.Message.ResponseTimeNsec))
+				t = time.Unix(int64(*dt.Message.ResponseTimeSec), int64(*dt.Message.ResponseTimeNsec))
 			}
 
 			// For cases where we were unable to unpack the DNS message we
@@ -378,6 +385,26 @@ filterLoop:
 						fmt.Printf("setting remaining label%d to null\n", i)
 						labelSlice[i].AppendNull()
 					}
+				}
+			}
+
+			if isQuery {
+				responseTime.AppendNull()
+				arrowTimeQuery, err := arrow.TimestampFromTime(t, arrow.Nanosecond)
+				if err != nil {
+					dtf.log.Printf("unable to parse query_time: %s, appending null", err)
+					queryTime.AppendNull()
+				} else {
+					queryTime.Append(arrowTimeQuery)
+				}
+			} else {
+				queryTime.AppendNull()
+				arrowTimeResponse, err := arrow.TimestampFromTime(t, arrow.Nanosecond)
+				if err != nil {
+					dtf.log.Printf("unable to parse response_time: %s, appending null", err)
+					responseTime.AppendNull()
+				} else {
+					responseTime.Append(arrowTimeResponse)
 				}
 			}
 

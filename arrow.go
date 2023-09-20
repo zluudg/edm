@@ -29,6 +29,10 @@ func dnsSessionRowArrowSchema() *arrow.Schema {
 	// FQDN as key
 	arrowFields = append(arrowFields, createLabelFields()...)
 
+	// Timestamps
+	arrowFields = append(arrowFields, arrow.Field{Name: "query_time", Type: arrow.FixedWidthTypes.Timestamp_ns, Nullable: true})
+	arrowFields = append(arrowFields, arrow.Field{Name: "response_time", Type: arrow.FixedWidthTypes.Timestamp_ns, Nullable: true})
+
 	return arrow.NewSchema(
 		arrowFields,
 		nil,
