@@ -277,7 +277,7 @@ filterLoop:
 			}
 			dtf.pseudonymizeDnstap(dt)
 
-			msg, t := parsePacket(dt, isQuery)
+			msg, timestamp := parsePacket(dt, isQuery)
 
 			// For cases where we were unable to unpack the DNS message we
 			// skip parsing.
@@ -293,7 +293,7 @@ filterLoop:
 
 			setLabels(dtf, msg, lastLabelOffset, labelSlice)
 
-			setTimestamp(dtf, isQuery, t, queryTime, responseTime)
+			setTimestamp(dtf, isQuery, timestamp, queryTime, responseTime)
 
 			// Since we have set fields in the arrow data at this
 			// point we have things to write out
@@ -305,7 +305,6 @@ filterLoop:
 				break filterLoop
 			}
 			dtf.dnstapOutput.GetOutputChannel() <- b
-
 
 		case <-ticker.C:
 			if !arrow_updated {
@@ -434,10 +433,10 @@ func setLabels(dtf *dnstapFilter, msg *dns.Msg, lastLabelOffset int, labelSlice 
 	}
 }
 
-func setTimestamp(dtf *dnstapFilter, isQuery bool, t time.Time, queryTime *array.TimestampBuilder, responseTime *array.TimestampBuilder) {
+func setTimestamp(dtf *dnstapFilter, isQuery bool, timestamp time.Time, queryTime *array.TimestampBuilder, responseTime *array.TimestampBuilder) {
 	if isQuery {
 		responseTime.AppendNull()
-		arrowTimeQuery, err := arrow.TimestampFromTime(t, arrow.Nanosecond)
+		arrowTimeQuery, err := arrow.TimestampFromTime(timestamp, arrow.Nanosecond)
 		if err != nil {
 			dtf.log.Printf("unable to parse query_time: %s, appending null", err)
 			queryTime.AppendNull()
@@ -446,7 +445,7 @@ func setTimestamp(dtf *dnstapFilter, isQuery bool, t time.Time, queryTime *array
 		}
 	} else {
 		queryTime.AppendNull()
-		arrowTimeResponse, err := arrow.TimestampFromTime(t, arrow.Nanosecond)
+		arrowTimeResponse, err := arrow.TimestampFromTime(timestamp, arrow.Nanosecond)
 		if err != nil {
 			dtf.log.Printf("unable to parse response_time: %s, appending null", err)
 			responseTime.AppendNull()
