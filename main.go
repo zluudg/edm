@@ -450,7 +450,8 @@ func writeParquet(dtf *dnstapFilter, arrowSchema *arrow.Schema, record arrow.Rec
 	if err != nil {
 		dtf.log.Printf("unable to open %s", outFileName)
 	}
-	defer outFile.Close()
+	// No need to defer outFile.Close(), handled by parquetWriter.Close() below.
+
 	parquetWriter, err := pqarrow.NewFileWriter(arrowSchema, outFile, nil, pqarrow.DefaultWriterProps())
 	if err != nil {
 		dtf.log.Printf("unable to create parquet writer: %w", err)
