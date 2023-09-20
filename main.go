@@ -253,8 +253,8 @@ func (dtf *dnstapFilter) runFilter(arrowPool *memory.GoAllocator, arrowSchema *a
 	labelSlice := []*array.StringBuilder{label0, label1, label2, label3, label4, label5, label6, label7, label8, label9}
 	lastLabelOffset := len(labelSlice) - 1
 
-	// Keep track of if we have recorded any dnstap packets or not at rotation time
-	var dnstap_seen bool
+	// Keep track of if we have recorded any dnstap packets in arrow data
+	var arrow_updated bool
 
 filterLoop:
 	for {
@@ -295,6 +295,10 @@ filterLoop:
 
 			setTimestamp(dtf, isQuery, t, queryTime, responseTime)
 
+			// Since we have set fields in the arrow data at this
+			// point we have things to write out
+			arrow_updated = true
+
 			b, err := proto.Marshal(dt)
 			if err != nil {
 				dtf.log.Printf("dnstapFilter.runFilter: proto.Marshal() failed: %s, returning", err)
@@ -302,18 +306,17 @@ filterLoop:
 			}
 			dtf.dnstapOutput.GetOutputChannel() <- b
 
-			dnstap_seen = true
 
 		case <-ticker.C:
-			if !dnstap_seen {
-				dtf.log.Printf("no dnstap seen, we have not received any dnstap frames, printing nothing")
+			if !arrow_updated {
+				dtf.log.Printf("no dnstap data stored in to arrow, printing nothing")
 				continue
 			}
 
-			// Prepare for next collection phase
-			dnstap_seen = false
-
 			record := dnsSessionRowBuilder.NewRecord()
+
+			// We have created a record and therefore the recordbuilder is reset
+			arrow_updated = false
 
 			err := writeParquet(dtf, arrowSchema, record)
 			if err != nil {
