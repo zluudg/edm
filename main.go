@@ -426,7 +426,9 @@ filterLoop:
 			// Prepare for next collection phase
 			dnstap_seen = false
 
-			err := writeParquet(dtf, arrowSchema, dnsSessionRowBuilder)
+			record := dnsSessionRowBuilder.NewRecord()
+
+			err := writeParquet(dtf, arrowSchema, record)
 			if err != nil {
 				continue
 			}
@@ -440,7 +442,8 @@ filterLoop:
 	close(dtf.done)
 }
 
-func writeParquet(dtf *dnstapFilter, arrowSchema *arrow.Schema, dnsSessionRowBuilder *array.RecordBuilder) error {
+func writeParquet(dtf *dnstapFilter, arrowSchema *arrow.Schema, record arrow.Record) error {
+	defer record.Release()
 	outFileName := "/tmp/dns_session_block.parquet"
 	dtf.log.Printf("writing out parquet file %s", outFileName)
 	outFile, err := os.Create(outFileName)
@@ -453,10 +456,7 @@ func writeParquet(dtf *dnstapFilter, arrowSchema *arrow.Schema, dnsSessionRowBui
 		dtf.log.Printf("unable to create parquet writer: %w", err)
 	}
 
-	rec1 := dnsSessionRowBuilder.NewRecord()
-	defer rec1.Release()
-
-	err = parquetWriter.Write(rec1)
+	err = parquetWriter.Write(record)
 	if err != nil {
 		return fmt.Errorf("unable to write parquet file: %w", err)
 	}
@@ -465,7 +465,7 @@ func writeParquet(dtf *dnstapFilter, arrowSchema *arrow.Schema, dnsSessionRowBui
 		return fmt.Errorf("unable to close parquet file: %w", err)
 	}
 
-	jsonBytes, err := rec1.MarshalJSON()
+	jsonBytes, err := record.MarshalJSON()
 	if err != nil {
 		return fmt.Errorf("error marshalling json fron rec: %w", err)
 	}
