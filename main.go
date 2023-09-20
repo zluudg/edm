@@ -339,7 +339,7 @@ func parquetWriter(dtf *dnstapFilter, arrowSchema *arrow.Schema, ch chan arrow.R
 		record := <-ch
 		err := writeParquet(dtf, arrowSchema, record)
 		if err != nil {
-			continue
+			dtf.log.Printf(err.Error())
 		}
 
 	}
@@ -475,13 +475,13 @@ func writeParquet(dtf *dnstapFilter, arrowSchema *arrow.Schema, record arrow.Rec
 	dtf.log.Printf("writing out parquet file %s", outFileName)
 	outFile, err := os.Create(outFileName)
 	if err != nil {
-		dtf.log.Printf("unable to open %s", outFileName)
+		return fmt.Errorf("unable to open %s", outFileName)
 	}
 	// No need to defer outFile.Close(), handled by parquetWriter.Close() below.
 
 	parquetWriter, err := pqarrow.NewFileWriter(arrowSchema, outFile, nil, pqarrow.DefaultWriterProps())
 	if err != nil {
-		dtf.log.Printf("unable to create parquet writer: %w", err)
+		return fmt.Errorf("unable to create parquet writer: %w", err)
 	}
 
 	err = parquetWriter.Write(record)
