@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
-	"math/rand"
 	"net"
 	"os"
 	"os/signal"
@@ -46,7 +45,6 @@ func main() {
 	outputTCP := flag.String("output-tcp", "", "the target and port to write dnstap streams to, e.g. '127.0.0.1:5555'")
 	cryptoPanKey := flag.String("cryptopan-key", "", "override the secret used for Crypto-PAn pseudonymization")
 	cryptoPanKeySalt := flag.String("cryptopan-key-salt", "dtm-kdf-salt-val", "the salt used for key derivation")
-	simpleRandomSamplingN := flag.Int("simple-random-sampling-n", 0, "only capture random 1-out-of-N dnstap messages, 0 disables sampling")
 	flag.Parse()
 
 	// For now we only support a single output at a time
@@ -143,7 +141,7 @@ func main() {
 	arrowPool := memory.NewGoAllocator()
 
 	// Create an instance of the filter
-	dtf, err := newDnstapFilter(log.Default(), dnstapOutput, aesKey, *simpleRandomSamplingN, *debug)
+	dtf, err := newDnstapFilter(log.Default(), dnstapOutput, aesKey, *debug)
 	if err != nil {
 		slog.Error(err.Error())
 		os.Exit(1)
@@ -195,11 +193,10 @@ type dnstapFilter struct {
 	cryptopan    *cryptopan.Cryptopan // used for pseudonymizing IP addresses
 	stop         chan struct{}        // close this channel to gracefully stop runFilter()
 	done         chan struct{}        // block on this channel to make sure output is flushed before exiting
-	simpleSample int                  // only capture random 1-out-of-N dnstap messages and discard the rest, the value 0 disables sampling
 	debug        bool                 // if we should print debug messages during operation
 }
 
-func newDnstapFilter(logger dnstap.Logger, dnstapOutput dnstap.Output, cryptoPanKey []byte, simpleRandomSamplingN int, debug bool) (*dnstapFilter, error) {
+func newDnstapFilter(logger dnstap.Logger, dnstapOutput dnstap.Output, cryptoPanKey []byte, debug bool) (*dnstapFilter, error) {
 	cpn, err := cryptopan.New(cryptoPanKey)
 	if err != nil {
 		return nil, err
@@ -210,7 +207,6 @@ func newDnstapFilter(logger dnstap.Logger, dnstapOutput dnstap.Output, cryptoPan
 	dtf.done = make(chan struct{})
 	dtf.inputChannel = make(chan []byte, cap(dnstapOutput.GetOutputChannel()))
 	dtf.dnstapOutput = dnstapOutput
-	dtf.simpleSample = simpleRandomSamplingN
 	dtf.log = logger
 	dtf.debug = debug
 
@@ -259,15 +255,6 @@ filterLoop:
 	for {
 		select {
 		case frame := <-dtf.inputChannel:
-			if dtf.simpleSample > 0 {
-				// #nosec G404 -- Deterministic math/rand should be OK for sampling purposes
-				if rand.Intn(dtf.simpleSample) != 0 {
-					if dtf.debug {
-						dtf.log.Printf("skipping dnstap message due to sampling")
-					}
-					continue
-				}
-			}
 			if err := proto.Unmarshal(frame, dt); err != nil {
 				dtf.log.Printf("dnstapFilter.runFilter: proto.Unmarshal() failed: %s, returning", err)
 				break filterLoop

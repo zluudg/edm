@@ -24,8 +24,6 @@ Usage of ./dtm:
     	the file to write dnstap streams to ('-' means stdout)
   -output-tcp string
     	the target and port to write dnstap streams to, e.g. '127.0.0.1:5555'
-  -simple-random-sampling-n int
-    	only capture random 1-out-of-N dnstap messages, 0 disables sampling
 ```
 
 ## Usage
