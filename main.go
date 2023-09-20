@@ -329,84 +329,9 @@ filterLoop:
 				continue
 			}
 
-			// Store the labels in reverse order (example.com ->
-			// ["com", "example"] to map to label0 being the TLD
-			labels := dns.SplitDomainName(msg.Question[0].Name)
+			setLabels(dtf, msg, lastLabelOffset, labelSlice)
 
-			// labels is nil if this is the root domain (.)
-			if labels == nil {
-				fmt.Println("setting all labels to null")
-				for _, arrowLabel := range labelSlice {
-					arrowLabel.AppendNull()
-				}
-			} else {
-				// Since arrow label0-label9 is the reverse
-				// order from our dns labels we need to map the
-				// last dns label to label0, the second last to
-				// label1 etc.
-				//
-				// Also, we only store up to the ninth label
-				// (label8) separately, after that the
-				// remainder goes in the tenth label (label9)
-				var leftMostLabel int
-				if len(labels) > lastLabelOffset {
-					leftMostLabel = len(labels) - lastLabelOffset
-				} else {
-					leftMostLabel = 0
-				}
-
-				dtf.log.Printf("leftMostLabel: ", leftMostLabel)
-
-				// Iterate backwards over the labels in dnstap
-				// packet, and iterate forward over the arrow
-				// label0-9 fields
-				arrowLabelIndex := 0
-				for i := len(labels) - 1; i >= leftMostLabel; i-- {
-					fmt.Printf("setting label%d to %s (%d)\n", arrowLabelIndex, labels[i], i)
-					labelSlice[arrowLabelIndex].Append(labels[i])
-					arrowLabelIndex++
-				}
-
-				if leftMostLabel > 0 {
-					// There remains labels that did not fit
-					// in label0-label8, insert the rest of
-					// them in label9
-					remainderSlice := labels[0:leftMostLabel]
-
-					// We store the labels backwards to match label0-label8
-					slices.Reverse(remainderSlice)
-					dtf.log.Printf("setting label%d to remainderSlice to %s\n", lastLabelOffset, remainderSlice)
-					labelSlice[lastLabelOffset].Append(strings.Join(remainderSlice, "."))
-				} else {
-					// We managed to fit all labels inside
-					// label0-8, fill out any remaining
-					// labelX fields with null
-					for i := arrowLabelIndex; i <= lastLabelOffset; i++ {
-						fmt.Printf("setting remaining label%d to null\n", i)
-						labelSlice[i].AppendNull()
-					}
-				}
-			}
-
-			if isQuery {
-				responseTime.AppendNull()
-				arrowTimeQuery, err := arrow.TimestampFromTime(t, arrow.Nanosecond)
-				if err != nil {
-					dtf.log.Printf("unable to parse query_time: %s, appending null", err)
-					queryTime.AppendNull()
-				} else {
-					queryTime.Append(arrowTimeQuery)
-				}
-			} else {
-				queryTime.AppendNull()
-				arrowTimeResponse, err := arrow.TimestampFromTime(t, arrow.Nanosecond)
-				if err != nil {
-					dtf.log.Printf("unable to parse response_time: %s, appending null", err)
-					responseTime.AppendNull()
-				} else {
-					responseTime.Append(arrowTimeResponse)
-				}
-			}
+			setTimestamp(dtf, isQuery, t, queryTime, responseTime)
 
 			b, err := proto.Marshal(dt)
 			if err != nil {
@@ -440,6 +365,89 @@ filterLoop:
 	dtf.dnstapOutput.Close()
 	// Signal main() that we are done and ready to exit
 	close(dtf.done)
+}
+
+func setLabels(dtf *dnstapFilter, msg *dns.Msg, lastLabelOffset int, labelSlice []*array.StringBuilder) {
+	// Store the labels in reverse order (example.com ->
+	// ["com", "example"]) to map to label0 being the TLD
+	labels := dns.SplitDomainName(msg.Question[0].Name)
+
+	// labels is nil if this is the root domain (.)
+	if labels == nil {
+		fmt.Println("setting all labels to null")
+		for _, arrowLabel := range labelSlice {
+			arrowLabel.AppendNull()
+		}
+	} else {
+		// Since arrow label0-label9 is the reverse
+		// order from our dns labels we need to map the
+		// last dns label to label0, the second last to
+		// label1 etc.
+		//
+		// Also, we only store up to the ninth label
+		// (label8) separately, after that the
+		// remainder goes in the tenth label (label9)
+		var leftMostLabel int
+		if len(labels) > lastLabelOffset {
+			leftMostLabel = len(labels) - lastLabelOffset
+		} else {
+			leftMostLabel = 0
+		}
+
+		dtf.log.Printf("leftMostLabel: ", leftMostLabel)
+
+		// Iterate backwards over the labels in dnstap
+		// packet, and iterate forward over the arrow
+		// label0-9 fields
+		arrowLabelIndex := 0
+		for i := len(labels) - 1; i >= leftMostLabel; i-- {
+			fmt.Printf("setting label%d to %s (%d)\n", arrowLabelIndex, labels[i], i)
+			labelSlice[arrowLabelIndex].Append(labels[i])
+			arrowLabelIndex++
+		}
+
+		if leftMostLabel > 0 {
+			// There remains labels that did not fit
+			// in label0-label8, insert the rest of
+			// them in label9
+			remainderSlice := labels[0:leftMostLabel]
+
+			// We store the labels backwards to match label0-label8
+			slices.Reverse(remainderSlice)
+			dtf.log.Printf("setting label%d to remainderSlice to %s\n", lastLabelOffset, remainderSlice)
+			labelSlice[lastLabelOffset].Append(strings.Join(remainderSlice, "."))
+		} else {
+			// We managed to fit all labels inside
+			// label0-8, fill out any remaining
+			// labelX fields with null
+			for i := arrowLabelIndex; i <= lastLabelOffset; i++ {
+				fmt.Printf("setting remaining label%d to null\n", i)
+				labelSlice[i].AppendNull()
+			}
+		}
+	}
+}
+
+func setTimestamp(dtf *dnstapFilter, isQuery bool, t time.Time, queryTime *array.TimestampBuilder, responseTime *array.TimestampBuilder) {
+	if isQuery {
+		responseTime.AppendNull()
+		arrowTimeQuery, err := arrow.TimestampFromTime(t, arrow.Nanosecond)
+		if err != nil {
+			dtf.log.Printf("unable to parse query_time: %s, appending null", err)
+			queryTime.AppendNull()
+		} else {
+			queryTime.Append(arrowTimeQuery)
+		}
+	} else {
+		queryTime.AppendNull()
+		arrowTimeResponse, err := arrow.TimestampFromTime(t, arrow.Nanosecond)
+		if err != nil {
+			dtf.log.Printf("unable to parse response_time: %s, appending null", err)
+			responseTime.AppendNull()
+		} else {
+			responseTime.Append(arrowTimeResponse)
+		}
+	}
 }
 
 func writeParquet(dtf *dnstapFilter, arrowSchema *arrow.Schema, record arrow.Record) error {
