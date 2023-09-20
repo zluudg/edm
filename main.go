@@ -256,8 +256,6 @@ func (dtf *dnstapFilter) runFilter(arrowPool *memory.GoAllocator, arrowSchema *a
 	// Keep track of if we have recorded any dnstap packets or not at rotation time
 	var dnstap_seen bool
 
-	var queryAddress, responseAddress string
-
 filterLoop:
 	for {
 		select {
@@ -279,43 +277,7 @@ filterLoop:
 			}
 			dtf.pseudonymizeDnstap(dt)
 
-			msg := new(dns.Msg)
-
-			var t time.Time
-			var err error
-
-			qa := net.IP(dt.Message.QueryAddress)
-			ra := net.IP(dt.Message.ResponseAddress)
-
-			// Query address: 10.10.10.10:31337 or ?
-			if qa != nil {
-				queryAddress = qa.String() + ":" + strconv.FormatUint(uint64(*dt.Message.QueryPort), 10)
-			} else {
-				queryAddress = "?"
-			}
-
-			// Response address: 10.10.10.10:31337 or ?
-			if ra != nil {
-				responseAddress = ra.String() + ":" + strconv.FormatUint(uint64(*dt.Message.ResponsePort), 10)
-			} else {
-				responseAddress = "?"
-			}
-
-			if isQuery {
-				err = msg.Unpack(dt.Message.QueryMessage)
-				if err != nil {
-					log.Printf("unable to unpack query message (%s -> %s): %s", queryAddress, responseAddress, err)
-					msg = nil
-				}
-				t = time.Unix(int64(*dt.Message.QueryTimeSec), int64(*dt.Message.QueryTimeNsec))
-			} else {
-				err = msg.Unpack(dt.Message.ResponseMessage)
-				if err != nil {
-					log.Printf("unable to unpack response message (%s <- %s): %s", queryAddress, responseAddress, err)
-					msg = nil
-				}
-				t = time.Unix(int64(*dt.Message.ResponseTimeSec), int64(*dt.Message.ResponseTimeNsec))
-			}
+			msg, t := parsePacket(dt, isQuery)
 
 			// For cases where we were unable to unpack the DNS message we
 			// skip parsing.
@@ -365,6 +327,47 @@ filterLoop:
 	dtf.dnstapOutput.Close()
 	// Signal main() that we are done and ready to exit
 	close(dtf.done)
+}
+
+func parsePacket(dt *dnstap.Dnstap, isQuery bool) (*dns.Msg, time.Time) {
+	var t time.Time
+	var err error
+	var queryAddress, responseAddress string
+
+	qa := net.IP(dt.Message.QueryAddress)
+	ra := net.IP(dt.Message.ResponseAddress)
+
+	// Query address: 10.10.10.10:31337 or ?
+	if qa != nil {
+		queryAddress = qa.String() + ":" + strconv.FormatUint(uint64(*dt.Message.QueryPort), 10)
+	} else {
+		queryAddress = "?"
+	}
+
+	// Response address: 10.10.10.10:31337 or ?
+	if ra != nil {
+		responseAddress = ra.String() + ":" + strconv.FormatUint(uint64(*dt.Message.ResponsePort), 10)
+	} else {
+		responseAddress = "?"
+	}
+	msg := new(dns.Msg)
+	if isQuery {
+		err = msg.Unpack(dt.Message.QueryMessage)
+		if err != nil {
+			log.Printf("unable to unpack query message (%s -> %s): %s", queryAddress, responseAddress, err)
+			msg = nil
+		}
+		t = time.Unix(int64(*dt.Message.QueryTimeSec), int64(*dt.Message.QueryTimeNsec))
+	} else {
+		err = msg.Unpack(dt.Message.ResponseMessage)
+		if err != nil {
+			log.Printf("unable to unpack response message (%s <- %s): %s", queryAddress, responseAddress, err)
+			msg = nil
+		}
+		t = time.Unix(int64(*dt.Message.ResponseTimeSec), int64(*dt.Message.ResponseTimeNsec))
+	}
+
+	return msg, t
 }
 
 func setLabels(dtf *dnstapFilter, msg *dns.Msg, lastLabelOffset int, labelSlice []*array.StringBuilder) {
