@@ -256,6 +256,13 @@ func (dtf *dnstapFilter) runFilter(arrowPool *memory.GoAllocator, arrowSchema *a
 	// Keep track of if we have recorded any dnstap packets in arrow data
 	var arrow_updated bool
 
+	// Channel used to feed the output writer, buffered so we do not block
+	// filterLoop if writing is slow
+	parquetWriterCh := make(chan arrow.Record, 100)
+
+	// Start the record writer in the background
+	go parquetWriter(dtf, arrowSchema, parquetWriterCh)
+
 filterLoop:
 	for {
 		select {
@@ -313,14 +320,10 @@ filterLoop:
 			}
 
 			record := dnsSessionRowBuilder.NewRecord()
-
 			// We have created a record and therefore the recordbuilder is reset
 			arrow_updated = false
 
-			err := writeParquet(dtf, arrowSchema, record)
-			if err != nil {
-				continue
-			}
+			parquetWriterCh <- record
 		case <-dtf.stop:
 			break filterLoop
 		}
@@ -329,6 +332,17 @@ filterLoop:
 	dtf.dnstapOutput.Close()
 	// Signal main() that we are done and ready to exit
 	close(dtf.done)
+}
+
+func parquetWriter(dtf *dnstapFilter, arrowSchema *arrow.Schema, ch chan arrow.Record) {
+	for {
+		record := <-ch
+		err := writeParquet(dtf, arrowSchema, record)
+		if err != nil {
+			continue
+		}
+
+	}
 }
 
 func parsePacket(dt *dnstap.Dnstap, isQuery bool) (*dns.Msg, time.Time) {
