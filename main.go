@@ -8,9 +8,10 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"slices"
+	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/apache/arrow/go/v13/arrow/array"
 	"github.com/apache/arrow/go/v13/arrow/memory"
 	"github.com/apache/arrow/go/v13/parquet/pqarrow"
+	"github.com/apache/arrow/go/v13/parquet/schema"
 	dnstap "github.com/dnstap/golang-dnstap"
 	"github.com/miekg/dns"
 	"github.com/yawning/cryptopan"
@@ -26,12 +28,88 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+type histogramData struct {
+	// label fields must be exported as we set them using reflection,
+	// otherwise: "panic: reflect: reflect.Value.SetString using value obtained using unexported field"
+	// Also store them as pointers so we can signal them being unset as
+	// opposed to an empty string
+	Label0     *string `parquet:"name=label0"`
+	Label1     *string `parquet:"name=label1"`
+	Label2     *string `parquet:"name=label2"`
+	Label3     *string `parquet:"name=label3"`
+	Label4     *string `parquet:"name=label4"`
+	Label5     *string `parquet:"name=label5"`
+	Label6     *string `parquet:"name=label6"`
+	Label7     *string `parquet:"name=label7"`
+	Label8     *string `parquet:"name=label8"`
+	Label9     *string `parquet:"name=label9"`
+	aCount     uint64  `parquet:"name=a_count"`
+	otherCount uint64  `parquet:"name=other_count"`
+}
+
 func readConfig(configFile string) (dtmConfig, error) {
 	conf := dtmConfig{}
 	if _, err := toml.DecodeFile(configFile, &conf); err != nil {
 		return dtmConfig{}, fmt.Errorf("readConfig: %w", err)
 	}
 	return conf, nil
+}
+
+func mapLabelsToHistogramData(labels []string, hgd *histogramData, labelLimit int) {
+	// If labels is nil (the "." zone) we can depend on the zero type of
+	// the label fields being nil, so nothing to do
+	if labels == nil {
+		return
+	}
+
+	reverseLabels := reverseLabelsBounded(labels, labelLimit)
+
+	s := reflect.ValueOf(hgd).Elem()
+
+	for index := range reverseLabels {
+		s.FieldByName("Label" + strconv.Itoa(index)).Set(reflect.ValueOf(&reverseLabels[index]))
+	}
+}
+
+func reverseLabelsBounded(labels []string, maxLen int) []string {
+	// If labels is nil (the "." zone) there is nothing to do
+	if labels == nil {
+		return nil
+	}
+
+	boundedReverseLabels := []string{}
+
+	remainderElems := 0
+	if len(labels) > maxLen {
+		remainderElems = len(labels) - maxLen
+	}
+
+	// Append all labels except the last one
+	for i := len(labels) - 1; i > remainderElems; i-- {
+		fmt.Printf("appending %s (%d)\n", labels[i], i)
+		boundedReverseLabels = append(boundedReverseLabels, labels[i])
+	}
+
+	// If the labels fit inside maxLen then just append the last remaining
+	// label as-is
+	if len(labels) <= maxLen {
+		fmt.Printf("appending final label %s (%d)\n", labels[0], 0)
+		boundedReverseLabels = append(boundedReverseLabels, labels[0])
+	} else {
+		// If there are more labels than maxLen we need to concatenate
+		// them before appending the last element
+		if remainderElems > 0 {
+			fmt.Println("building slices of remainders")
+			remainderLabels := []string{}
+			for i := remainderElems; i >= 0; i-- {
+				remainderLabels = append(remainderLabels, labels[i])
+			}
+
+			boundedReverseLabels = append(boundedReverseLabels, strings.Join(remainderLabels, "."))
+		}
+
+	}
+	return boundedReverseLabels
 }
 
 func main() {
@@ -213,6 +291,97 @@ func newDnstapFilter(logger dnstap.Logger, dnstapOutput dnstap.Output, cryptoPan
 	return dtf, nil
 }
 
+func newWellKnownDomainsMap(domainsList []string, labelLimit int) (map[string]*histogramData, error) {
+	m := map[string]*histogramData{}
+
+	sc, err := schema.NewSchemaFromStruct(histogramData{})
+	if err != nil {
+		return nil, err
+	}
+
+	schema.PrintSchema(sc.Root(), os.Stdout, 2)
+
+	for _, domain := range domainsList {
+		if _, ok := dns.IsDomainName(domain); !ok {
+			return nil, fmt.Errorf("string '%s' is not a valid domain name", domain)
+		}
+
+		labels := dns.SplitDomainName(domain)
+
+		hgd := &histogramData{}
+
+		mapLabelsToHistogramData(labels, hgd, labelLimit)
+
+		m[dns.Fqdn(domain)] = hgd
+	}
+
+	return m, nil
+}
+
+type wellKnownDomainsTracker struct {
+	mutex sync.RWMutex
+	// Store a pointer to histogramData so we can assign to it without
+	// "cannot assign to struct field in map" issues
+	m map[string]*histogramData
+}
+
+func newWellKnownDomainsTracker(domainsList []string, labelLimit int) (*wellKnownDomainsTracker, error) {
+
+	m, err := newWellKnownDomainsMap(domainsList, labelLimit)
+	if err != nil {
+		return nil, fmt.Errorf(err.Error())
+	}
+
+	return &wellKnownDomainsTracker{
+		m: m,
+	}, nil
+}
+
+func (wkd *wellKnownDomainsTracker) isKnown(q dns.Question) bool {
+	wkd.mutex.Lock()
+	defer wkd.mutex.Unlock()
+
+	if _, exists := wkd.m[q.Name]; exists {
+		switch q.Qtype {
+		case dns.TypeA:
+			wkd.m[q.Name].aCount++
+		default:
+			wkd.m[q.Name].otherCount++
+		}
+
+		return true
+	}
+
+	return false
+}
+
+//func (wkd *wellKnownDomainsTracker) writeParquet(q dns.Question) error {
+//	var err error
+//
+//	newMap, err := newWellKnownDomainsMap([]string{"www.google.com.", "www.facebook.com."})
+//	if err != nil {
+//		return err
+//	}
+//
+//	// Swap the map in use so we can write parquet data outside of the write lock
+//	wkd.mutex.Lock()
+//	lastMap := wkd.m
+//	wkd.m = newMap
+//	wkd.mutex.Unlock()
+//
+//	outFileName := "/tmp/dns_histogram.parquet"
+//	//dtf.log.Printf("writing out histogram file %s", outFileName)
+//	outFile, err := os.Create(outFileName)
+//	if err != nil {
+//		return fmt.Errorf("unable to open %s", outFileName)
+//	}
+//	defer outFile.Close()
+//
+//	file.NewParquetWriter(outFile)
+//
+//	return false
+//}
+
 // runFilter reads frames from the inputChannel, doing any modifications and
 // then passes them on to a dnstap.Output. To gracefully stop
 // runFilter() you need to close the dtf.stop channel.
@@ -251,7 +420,7 @@ func (dtf *dnstapFilter) runFilter(arrowPool *memory.GoAllocator, arrowSchema *a
 
 	// Store labels in a slice so we can reference them by index
 	labelSlice := []*array.StringBuilder{label0, label1, label2, label3, label4, label5, label6, label7, label8, label9}
-	lastLabelOffset := len(labelSlice) - 1
+	labelLimit := len(labelSlice)
 
 	// Keep track of if we have recorded any dnstap packets in arrow data
 	var arrow_updated bool
@@ -262,6 +431,14 @@ func (dtf *dnstapFilter) runFilter(arrowPool *memory.GoAllocator, arrowSchema *a
 
 	// Start the record writer in the background
 	go parquetWriter(dtf, arrowSchema, parquetWriterCh)
+
+	// TODO: read real data
+	wellKnownDomains := []string{"www.google.com.", "www.facebook.com."}
+
+	wkdTracker, err := newWellKnownDomainsTracker(wellKnownDomains, labelLimit)
+	if err != nil {
+		dtf.log.Printf("unable to initialize wkdTracker")
+	}
 
 filterLoop:
 	for {
@@ -298,7 +475,14 @@ filterLoop:
 				continue
 			}
 
-			setLabels(dtf, msg, lastLabelOffset, labelSlice)
+			if wkdTracker.isKnown(msg.Question[0]) {
+				dtf.log.Printf("skipping well known domain")
+				continue
+			}
+
+			fmt.Println(wkdTracker.m["www.google.com."].aCount)
+
+			setLabels(dtf, msg, labelLimit, labelSlice)
 
 			setTimestamp(dtf, isQuery, timestamp, queryTime, responseTime)
 
@@ -324,6 +508,9 @@ filterLoop:
 			arrow_updated = false
 
 			parquetWriterCh <- record
+
+			//wkdTracker.writeParquet()
+
 		case <-dtf.stop:
 			break filterLoop
 		}
@@ -386,61 +573,26 @@ func parsePacket(dt *dnstap.Dnstap, isQuery bool) (*dns.Msg, time.Time) {
 	return msg, t
 }
 
-func setLabels(dtf *dnstapFilter, msg *dns.Msg, lastLabelOffset int, labelSlice []*array.StringBuilder) {
-	// Store the labels in reverse order (example.com ->
-	// ["com", "example"]) to map to label0 being the TLD
+func setLabels(dtf *dnstapFilter, msg *dns.Msg, labelLimit int, labelSlice []*array.StringBuilder) {
 	labels := dns.SplitDomainName(msg.Question[0].Name)
 
 	// labels is nil if this is the root domain (.)
 	if labels == nil {
-		fmt.Println("setting all labels to null")
+		dtf.log.Printf("setting all labels to null")
 		for _, arrowLabel := range labelSlice {
 			arrowLabel.AppendNull()
 		}
 	} else {
-		// Since arrow label0-label9 is the reverse
-		// order from our dns labels we need to map the
-		// last dns label to label0, the second last to
-		// label1 etc.
-		//
-		// Also, we only store up to the ninth label
-		// (label8) separately, after that the
-		// remainder goes in the tenth label (label9)
-		var leftMostLabel int
-		if len(labels) > lastLabelOffset {
-			leftMostLabel = len(labels) - lastLabelOffset
-		} else {
-			leftMostLabel = 0
+		reverseLabels := reverseLabelsBounded(labels, labelLimit)
+		for i, label := range reverseLabels {
+			dtf.log.Printf("setting label%d to %s", i, label)
+			labelSlice[i].Append(label)
 		}
 
-		dtf.log.Printf("leftMostLabel: ", leftMostLabel)
-
-		// Iterate backwards over the labels in dnstap
-		// packet, and iterate forward over the arrow
-		// label0-9 fields
-		arrowLabelIndex := 0
-		for i := len(labels) - 1; i >= leftMostLabel; i-- {
-			fmt.Printf("setting label%d to %s (%d)\n", arrowLabelIndex, labels[i], i)
-			labelSlice[arrowLabelIndex].Append(labels[i])
-			arrowLabelIndex++
-		}
-
-		if leftMostLabel > 0 {
-			// There remains labels that did not fit
-			// in label0-label8, insert the rest of
-			// them in label9
-			remainderSlice := labels[0:leftMostLabel]
-
-			// We store the labels backwards to match label0-label8
-			slices.Reverse(remainderSlice)
-			dtf.log.Printf("setting label%d to remainderSlice to %s\n", lastLabelOffset, remainderSlice)
-			labelSlice[lastLabelOffset].Append(strings.Join(remainderSlice, "."))
-		} else {
-			// We managed to fit all labels inside
-			// label0-8, fill out any remaining
-			// labelX fields with null
-			for i := arrowLabelIndex; i <= lastLabelOffset; i++ {
-				fmt.Printf("setting remaining label%d to null\n", i)
+		// Fill out remaining labels with null if needed
+		if len(reverseLabels) < labelLimit {
+			for i := len(reverseLabels); i < labelLimit; i++ {
+				dtf.log.Printf("setting remaining label%d to null\n", i)
 				labelSlice[i].AppendNull()
 			}
 		}
