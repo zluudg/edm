@@ -20,9 +20,9 @@ import (
 	"github.com/apache/arrow/go/v13/arrow/array"
 	"github.com/apache/arrow/go/v13/arrow/memory"
 	"github.com/apache/arrow/go/v13/parquet/pqarrow"
-	"github.com/apache/arrow/go/v13/parquet/schema"
 	dnstap "github.com/dnstap/golang-dnstap"
 	"github.com/miekg/dns"
+	"github.com/xitongsys/parquet-go/writer"
 	"github.com/yawning/cryptopan"
 	"golang.org/x/crypto/argon2"
 	"google.golang.org/protobuf/proto"
@@ -33,18 +33,18 @@ type histogramData struct {
 	// otherwise: "panic: reflect: reflect.Value.SetString using value obtained using unexported field"
 	// Also store them as pointers so we can signal them being unset as
 	// opposed to an empty string
-	Label0     *string `parquet:"name=label0"`
-	Label1     *string `parquet:"name=label1"`
-	Label2     *string `parquet:"name=label2"`
-	Label3     *string `parquet:"name=label3"`
-	Label4     *string `parquet:"name=label4"`
-	Label5     *string `parquet:"name=label5"`
-	Label6     *string `parquet:"name=label6"`
-	Label7     *string `parquet:"name=label7"`
-	Label8     *string `parquet:"name=label8"`
-	Label9     *string `parquet:"name=label9"`
-	aCount     uint64  `parquet:"name=a_count"`
-	otherCount uint64  `parquet:"name=other_count"`
+	Label0     *string `parquet:"name=label0, type=BYTE_ARRAY"`
+	Label1     *string `parquet:"name=label1, type=BYTE_ARRAY"`
+	Label2     *string `parquet:"name=label2, type=BYTE_ARRAY"`
+	Label3     *string `parquet:"name=label3, type=BYTE_ARRAY"`
+	Label4     *string `parquet:"name=label4, type=BYTE_ARRAY"`
+	Label5     *string `parquet:"name=label5, type=BYTE_ARRAY"`
+	Label6     *string `parquet:"name=label6, type=BYTE_ARRAY"`
+	Label7     *string `parquet:"name=label7, type=BYTE_ARRAY"`
+	Label8     *string `parquet:"name=label8, type=BYTE_ARRAY"`
+	Label9     *string `parquet:"name=label9, type=BYTE_ARRAY"`
+	ACount     int64   `parquet:"name=a_count, type=INT64, convertedtype=UINT_64"`
+	OtherCount int64   `parquet:"name=other_count, type=INT64, convertedtype=UINT_64"`
 }
 
 func readConfig(configFile string) (dtmConfig, error) {
@@ -294,13 +294,6 @@ func newDnstapFilter(logger dnstap.Logger, dnstapOutput dnstap.Output, cryptoPan
 func newWellKnownDomainsMap(domainsList []string, labelLimit int) (map[string]*histogramData, error) {
 	m := map[string]*histogramData{}
 
-	sc, err := schema.NewSchemaFromStruct(histogramData{})
-	if err != nil {
-		return nil, err
-	}
-
-	schema.PrintSchema(sc.Root(), os.Stdout, 2)
-
 	for _, domain := range domainsList {
 		if _, ok := dns.IsDomainName(domain); !ok {
 			return nil, fmt.Errorf("string '%s' is not a valid domain name", domain)
@@ -326,7 +319,6 @@ type wellKnownDomainsTracker struct {
 }
 
 func newWellKnownDomainsTracker(domainsList []string, labelLimit int) (*wellKnownDomainsTracker, error) {
-
 	m, err := newWellKnownDomainsMap(domainsList, labelLimit)
 	if err != nil {
 		return nil, fmt.Errorf(err.Error())
@@ -344,9 +336,9 @@ func (wkd *wellKnownDomainsTracker) isKnown(q dns.Question) bool {
 	if _, exists := wkd.m[q.Name]; exists {
 		switch q.Qtype {
 		case dns.TypeA:
-			wkd.m[q.Name].aCount++
+			wkd.m[q.Name].ACount++
 		default:
-			wkd.m[q.Name].otherCount++
+			wkd.m[q.Name].OtherCount++
 		}
 
 		return true
@@ -355,32 +347,21 @@ func (wkd *wellKnownDomainsTracker) isKnown(q dns.Question) bool {
 	return false
 }
 
-//func (wkd *wellKnownDomainsTracker) writeParquet(q dns.Question) error {
-//	var err error
-//
-//	newMap, err := newWellKnownDomainsMap([]string{"www.google.com.", "www.facebook.com."})
-//	if err != nil {
-//		return err
-//	}
-//
-//	// Swap the map in use so we can write parquet data outside of the write lock
-//	wkd.mutex.Lock()
-//	lastMap := wkd.m
-//	wkd.m = newMap
-//	wkd.mutex.Unlock()
-//
-//	outFileName := "/tmp/dns_histogram.parquet"
-//	//dtf.log.Printf("writing out histogram file %s", outFileName)
-//	outFile, err := os.Create(outFileName)
-//	if err != nil {
-//		return fmt.Errorf("unable to open %s", outFileName)
-//	}
-//	defer outFile.Close()
-//
-//	file.NewParquetWriter(outFile)
-//
-//	return false
-//}
+func (wkd *wellKnownDomainsTracker) rotateMap() (map[string]*histogramData, error) {
+
+	newMap, err := newWellKnownDomainsMap([]string{"www.google.com.", "www.facebook.com."}, 9)
+	if err != nil {
+		return nil, err
+	}
+
+	// Swap the map in use so we can write parquet data outside of the write lock
+	wkd.mutex.Lock()
+	lastMap := wkd.m
+	wkd.m = newMap
+	wkd.mutex.Unlock()
+
+	return lastMap, nil
+}
 
 // runFilter reads frames from the inputChannel, doing any modifications and
 // then passes them on to a dnstap.Output. To gracefully stop
@@ -429,8 +410,13 @@ func (dtf *dnstapFilter) runFilter(arrowPool *memory.GoAllocator, arrowSchema *a
 	// filterLoop if writing is slow
 	parquetWriterCh := make(chan arrow.Record, 100)
 
-	// Start the record writer in the background
+	// Channel used to feed the histogram writer, buffered so we do not block
+	// filterLoop if writing is slow
+	histogramWriterCh := make(chan map[string]*histogramData, 100)
+
+	// Start the record writers in the background
 	go parquetWriter(dtf, arrowSchema, parquetWriterCh)
+	go histogramWriter(dtf, histogramWriterCh)
 
 	// TODO: read real data
 	wellKnownDomains := []string{"www.google.com.", "www.facebook.com."}
@@ -480,7 +466,7 @@ filterLoop:
 				continue
 			}
 
-			fmt.Println(wkdTracker.m["www.google.com."].aCount)
+			fmt.Println(wkdTracker.m["www.google.com."].ACount)
 
 			setLabels(dtf, msg, labelLimit, labelSlice)
 
@@ -498,18 +484,21 @@ filterLoop:
 			dtf.dnstapOutput.GetOutputChannel() <- b
 
 		case <-ticker.C:
-			if !arrow_updated {
-				dtf.log.Printf("no dnstap data stored in to arrow, printing nothing")
+			if arrow_updated {
+				record := dnsSessionRowBuilder.NewRecord()
+				// We have created a record and therefore the recordbuilder is reset
+				arrow_updated = false
+
+				parquetWriterCh <- record
+			}
+
+			hd, err := wkdTracker.rotateMap()
+			if err != nil {
+				dtf.log.Printf("unable to rotate histogram map: %s", err)
 				continue
 			}
 
-			record := dnsSessionRowBuilder.NewRecord()
-			// We have created a record and therefore the recordbuilder is reset
-			arrow_updated = false
-
-			parquetWriterCh <- record
-
-			//wkdTracker.writeParquet()
+			histogramWriterCh <- hd
 
 		case <-dtf.stop:
 			break filterLoop
@@ -525,6 +514,18 @@ func parquetWriter(dtf *dnstapFilter, arrowSchema *arrow.Schema, ch chan arrow.R
 	for {
 		record := <-ch
 		err := writeParquet(dtf, arrowSchema, record)
+		if err != nil {
+			dtf.log.Printf(err.Error())
+		}
+
+	}
+}
+
+func histogramWriter(dtf *dnstapFilter, ch chan map[string]*histogramData) {
+	for {
+		lastMap := <-ch
+		dtf.log.Printf("in histogramWriter")
+		err := writeHistogramParquet(dtf, lastMap)
 		if err != nil {
 			dtf.log.Printf(err.Error())
 		}
@@ -650,6 +651,42 @@ func writeParquet(dtf *dnstapFilter, arrowSchema *arrow.Schema, record arrow.Rec
 		return fmt.Errorf("error marshalling json fron rec: %w", err)
 	}
 	fmt.Println(string(jsonBytes))
+
+	return nil
+}
+
+func writeHistogramParquet(dtf *dnstapFilter, lastMap map[string]*histogramData) error {
+	dtf.log.Printf("in writeHistogramParquet")
+	outFileName := "/tmp/dns_histogram.parquet"
+	//dtf.log.Printf("writing out histogram file %s", outFileName)
+	outFile, err := os.Create(outFileName)
+	if err != nil {
+		return fmt.Errorf("unable to open %s", outFileName)
+	}
+	defer func() {
+		err := outFile.Close()
+		if err != nil {
+			dtf.log.Printf("unable to close histogram outfile: %s", err)
+		}
+	}()
+
+	parquetWriter, err := writer.NewParquetWriterFromWriter(outFile, new(histogramData), 4)
+	if err != nil {
+		return err
+	}
+
+	for domain, hGram := range lastMap {
+		fmt.Printf("%s: %#v\n", domain, *hGram)
+		err = parquetWriter.Write(*hGram)
+		if err != nil {
+			return err
+		}
+	}
+
+	err = parquetWriter.WriteStop()
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
