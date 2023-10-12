@@ -7,6 +7,7 @@ require (
 	github.com/apache/arrow/go/v13 v13.0.0
 	github.com/dnstap/golang-dnstap v0.4.0
 	github.com/miekg/dns v1.1.56
+	github.com/smhanov/dawg v0.0.0-20220118194912-66057bdbf2e3
 	github.com/xitongsys/parquet-go v1.6.2
 	github.com/yawning/cryptopan v0.0.0-20170504040949-65bca51288fe
 	golang.org/x/crypto v0.13.0

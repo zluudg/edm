@@ -22,6 +22,7 @@ import (
 	"github.com/apache/arrow/go/v13/parquet/pqarrow"
 	dnstap "github.com/dnstap/golang-dnstap"
 	"github.com/miekg/dns"
+	"github.com/smhanov/dawg"
 	"github.com/xitongsys/parquet-go/writer"
 	"github.com/yawning/cryptopan"
 	"golang.org/x/crypto/argon2"
@@ -55,20 +56,22 @@ func readConfig(configFile string) (dtmConfig, error) {
 	return conf, nil
 }
 
-func mapLabelsToHistogramData(labels []string, hgd *histogramData, labelLimit int) {
+func setHistogramLabels(labels []string, labelLimit int, hd *histogramData) *histogramData {
 	// If labels is nil (the "." zone) we can depend on the zero type of
 	// the label fields being nil, so nothing to do
 	if labels == nil {
-		return
+		return hd
 	}
 
 	reverseLabels := reverseLabelsBounded(labels, labelLimit)
 
-	s := reflect.ValueOf(hgd).Elem()
+	s := reflect.ValueOf(hd).Elem()
 
 	for index := range reverseLabels {
 		s.FieldByName("Label" + strconv.Itoa(index)).Set(reflect.ValueOf(&reverseLabels[index]))
 	}
+
+	return hd
 }
 
 func reverseLabelsBounded(labels []string, maxLen int) []string {
@@ -123,6 +126,7 @@ func main() {
 	outputTCP := flag.String("output-tcp", "", "the target and port to write dnstap streams to, e.g. '127.0.0.1:5555'")
 	cryptoPanKey := flag.String("cryptopan-key", "", "override the secret used for Crypto-PAn pseudonymization")
 	cryptoPanKeySalt := flag.String("cryptopan-key-salt", "dtm-kdf-salt-val", "the salt used for key derivation")
+	dawgFile := flag.String("well-known-domains", "well-known-domains.dawg", "the dawg file used for filtering well-known domains")
 	flag.Parse()
 
 	// For now we only support a single output at a time
@@ -248,7 +252,7 @@ func main() {
 	defer dnsSessionRowBuilder.Release()
 
 	// Start filter
-	go dtf.runFilter(arrowPool, dnsSessionRowSchema, dnsSessionRowBuilder)
+	go dtf.runFilter(arrowPool, dnsSessionRowSchema, dnsSessionRowBuilder, *dawgFile)
 
 	// Start dnstap.Output
 	go dnstapOutput.RunOutputLoop()
@@ -291,82 +295,73 @@ func newDnstapFilter(logger dnstap.Logger, dnstapOutput dnstap.Output, cryptoPan
 	return dtf, nil
 }
 
-func newWellKnownDomainsMap(domainsList []string, labelLimit int) (map[string]*histogramData, error) {
-	m := map[string]*histogramData{}
-
-	for _, domain := range domainsList {
-		if _, ok := dns.IsDomainName(domain); !ok {
-			return nil, fmt.Errorf("string '%s' is not a valid domain name", domain)
-		}
-
-		labels := dns.SplitDomainName(domain)
-
-		hgd := &histogramData{}
-
-		mapLabelsToHistogramData(labels, hgd, labelLimit)
-
-		m[dns.Fqdn(domain)] = hgd
-	}
-
-	return m, nil
-}
-
 type wellKnownDomainsTracker struct {
 	mutex sync.RWMutex
-	// Store a pointer to histogramData so we can assign to it without
-	// "cannot assign to struct field in map" issues
-	m map[string]*histogramData
+	wellKnownDomainsData
 }
 
-func newWellKnownDomainsTracker(domainsList []string, labelLimit int) (*wellKnownDomainsTracker, error) {
-	m, err := newWellKnownDomainsMap(domainsList, labelLimit)
-	if err != nil {
-		return nil, fmt.Errorf(err.Error())
-	}
-
-	return &wellKnownDomainsTracker{
-		m: m,
-	}, nil
+// Basically a copy of wellKnownDomainsTracker without the lock as it is only
+// used for channel transportation of no longer active data
+type wellKnownDomainsData struct {
+	// Store a pointer to histogramCounters so we can assign to it without
+	// "cannot assign to struct field in map" issues
+	m          map[int]*histogramData
+	dawgFinder dawg.Finder
 }
 
 func (wkd *wellKnownDomainsTracker) isKnown(q dns.Question) bool {
 	wkd.mutex.Lock()
 	defer wkd.mutex.Unlock()
 
-	if _, exists := wkd.m[q.Name]; exists {
-		switch q.Qtype {
-		case dns.TypeA:
-			wkd.m[q.Name].ACount++
-		default:
-			wkd.m[q.Name].OtherCount++
-		}
+	index := wkd.dawgFinder.IndexOf(q.Name)
 
-		return true
+	// If this is is not a well-known domain just return as fast as
+	// possible
+	if index == -1 {
+		return false
 	}
 
-	return false
+	if _, exists := wkd.m[index]; !exists {
+		// We leave the label0-9 fields set to nil here. Since this is in
+		// the hot path of dealing with dnstap packets the less work we do the
+		// better. They are filled in prior to writing out the parquet file.
+		wkd.m[index] = &histogramData{}
+	}
+
+	switch q.Qtype {
+	case dns.TypeA:
+		wkd.m[index].ACount++
+	default:
+		wkd.m[index].OtherCount++
+	}
+
+	return true
 }
 
-func (wkd *wellKnownDomainsTracker) rotateMap() (map[string]*histogramData, error) {
+func (wkd *wellKnownDomainsTracker) rotateTracker(dawgFile string) (*wellKnownDomainsData, error) {
 
-	newMap, err := newWellKnownDomainsMap([]string{"www.google.com.", "www.facebook.com."}, 9)
+	dawgFinder, err := dawg.Load(dawgFile)
 	if err != nil {
 		return nil, err
 	}
 
+	prevWKD := &wellKnownDomainsData{}
+
 	// Swap the map in use so we can write parquet data outside of the write lock
 	wkd.mutex.Lock()
-	lastMap := wkd.m
-	wkd.m = newMap
+	prevWKD.m = wkd.m
+	prevWKD.dawgFinder = wkd.dawgFinder
+	wkd.m = map[int]*histogramData{}
+	wkd.dawgFinder = dawgFinder
 	wkd.mutex.Unlock()
 
-	return lastMap, nil
+	return prevWKD, nil
 }
 
 // runFilter reads frames from the inputChannel, doing any modifications and
 // then passes them on to a dnstap.Output. To gracefully stop
 // runFilter() you need to close the dtf.stop channel.
-func (dtf *dnstapFilter) runFilter(arrowPool *memory.GoAllocator, arrowSchema *arrow.Schema, dnsSessionRowBuilder *array.RecordBuilder) {
+func (dtf *dnstapFilter) runFilter(arrowPool *memory.GoAllocator, arrowSchema *arrow.Schema, dnsSessionRowBuilder *array.RecordBuilder, dawgFile string) {
 	dt := &dnstap.Dnstap{}
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -412,18 +407,23 @@ func (dtf *dnstapFilter) runFilter(arrowPool *memory.GoAllocator, arrowSchema *a
 
 	// Channel used to feed the histogram writer, buffered so we do not block
 	// filterLoop if writing is slow
-	histogramWriterCh := make(chan map[string]*histogramData, 100)
+	histogramWriterCh := make(chan *wellKnownDomainsData, 100)
 
 	// Start the record writers in the background
 	go parquetWriter(dtf, arrowSchema, parquetWriterCh)
-	go histogramWriter(dtf, histogramWriterCh)
+	go histogramWriter(dtf, histogramWriterCh, labelLimit)
 
-	// TODO: read real data
-	wellKnownDomains := []string{"www.google.com.", "www.facebook.com."}
-
-	wkdTracker, err := newWellKnownDomainsTracker(wellKnownDomains, labelLimit)
+	dawgFinder, err := dawg.Load(dawgFile)
 	if err != nil {
-		dtf.log.Printf("unable to initialize wkdTracker")
+		slog.Error(err.Error())
+		os.Exit(1)
+	}
+
+	wkdTracker := &wellKnownDomainsTracker{
+		wellKnownDomainsData: wellKnownDomainsData{
+			m:          map[int]*histogramData{},
+			dawgFinder: dawgFinder,
+		},
 	}
 
 filterLoop:
@@ -462,11 +462,9 @@ filterLoop:
 			}
 
 			if wkdTracker.isKnown(msg.Question[0]) {
-				dtf.log.Printf("skipping well known domain")
+				dtf.log.Printf("skipping well-known domain %s", msg.Question[0].Name)
 				continue
 			}
-
-			fmt.Println(wkdTracker.m["www.google.com."].ACount)
 
 			setLabels(dtf, msg, labelLimit, labelSlice)
 
@@ -492,13 +490,13 @@ filterLoop:
 				parquetWriterCh <- record
 			}
 
-			hd, err := wkdTracker.rotateMap()
+			prevWKD, err := wkdTracker.rotateTracker(dawgFile)
 			if err != nil {
 				dtf.log.Printf("unable to rotate histogram map: %s", err)
 				continue
 			}
 
-			histogramWriterCh <- hd
+			histogramWriterCh <- prevWKD
 
 		case <-dtf.stop:
 			break filterLoop
@@ -521,11 +519,11 @@ func parquetWriter(dtf *dnstapFilter, arrowSchema *arrow.Schema, ch chan arrow.R
 	}
 }
 
-func histogramWriter(dtf *dnstapFilter, ch chan map[string]*histogramData) {
+func histogramWriter(dtf *dnstapFilter, ch chan *wellKnownDomainsData, labelLimit int) {
 	for {
-		lastMap := <-ch
+		prevWellKnownDomainsData := <-ch
 		dtf.log.Printf("in histogramWriter")
-		err := writeHistogramParquet(dtf, lastMap)
+		err := writeHistogramParquet(dtf, prevWellKnownDomainsData, labelLimit)
 		if err != nil {
 			dtf.log.Printf(err.Error())
 		}
@@ -655,7 +653,7 @@ func writeParquet(dtf *dnstapFilter, arrowSchema *arrow.Schema, record arrow.Rec
 	return nil
 }
 
-func writeHistogramParquet(dtf *dnstapFilter, lastMap map[string]*histogramData) error {
+func writeHistogramParquet(dtf *dnstapFilter, prevWellKnownDomainsData *wellKnownDomainsData, labelLimit int) error {
 	dtf.log.Printf("in writeHistogramParquet")
 	outFileName := "/tmp/dns_histogram.parquet"
 	//dtf.log.Printf("writing out histogram file %s", outFileName)
@@ -675,9 +673,19 @@ func writeHistogramParquet(dtf *dnstapFilter, lastMap map[string]*histogramData)
 		return err
 	}
 
-	for domain, hGram := range lastMap {
-		fmt.Printf("%s: %#v\n", domain, *hGram)
-		err = parquetWriter.Write(*hGram)
+	for index, hGramData := range prevWellKnownDomainsData.m {
+		domain, err := prevWellKnownDomainsData.dawgFinder.AtIndex(index)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s: %#v\n", domain, *hGramData)
+
+		labels := dns.SplitDomainName(domain)
+
+		// Setting the labels now when we are out of the hot path.
+		setHistogramLabels(labels, labelLimit, hGramData)
+
+		err = parquetWriter.Write(hGramData)
 		if err != nil {
 			return err
 		}
@@ -685,7 +693,7 @@ func writeHistogramParquet(dtf *dnstapFilter, lastMap map[string]*histogramData)
 
 	err = parquetWriter.WriteStop()
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to call WriteStop on parquet writer: %w", err)
 	}
 
 	return nil
