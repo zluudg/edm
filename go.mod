@@ -7,7 +7,9 @@ require (
 	github.com/apache/arrow/go/v13 v13.0.0
 	github.com/dnstap/golang-dnstap v0.4.0
 	github.com/miekg/dns v1.1.56
+	github.com/segmentio/go-hll v1.0.1
 	github.com/smhanov/dawg v0.0.0-20220118194912-66057bdbf2e3
+	github.com/spaolacci/murmur3 v1.1.0
 	github.com/xitongsys/parquet-go v1.6.2
 	github.com/yawning/cryptopan v0.0.0-20170504040949-65bca51288fe
 	golang.org/x/crypto v0.13.0
@@ -30,6 +32,7 @@ require (
 	github.com/minio/asm2plan9s v0.0.0-20200509001527-cdd76441f9d8 // indirect
 	github.com/minio/c2goasm v0.0.0-20190812172519-36a3d3bbc4f3 // indirect
 	github.com/pierrec/lz4/v4 v4.1.18 // indirect
+	github.com/pkg/errors v0.9.1 // indirect
 	github.com/xitongsys/parquet-go-source v0.0.0-20200817004010-026bad9b25d0 // indirect
 	github.com/zeebo/xxh3 v1.0.2 // indirect
 	golang.org/x/exp v0.0.0-20230905200255-921286631fa9 // indirect

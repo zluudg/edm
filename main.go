@@ -1,11 +1,15 @@
 package main
 
 import (
+	"crypto/rand"
 	"flag"
 	"fmt"
+	"hash"
 	"log"
 	"log/slog"
+	"math/big"
 	"net"
+	"net/netip"
 	"os"
 	"os/signal"
 	"reflect"
@@ -22,7 +26,9 @@ import (
 	"github.com/apache/arrow/go/v13/parquet/pqarrow"
 	dnstap "github.com/dnstap/golang-dnstap"
 	"github.com/miekg/dns"
+	"github.com/segmentio/go-hll"
 	"github.com/smhanov/dawg"
+	"github.com/spaolacci/murmur3"
 	"github.com/xitongsys/parquet-go/writer"
 	"github.com/yawning/cryptopan"
 	"golang.org/x/crypto/argon2"
@@ -46,6 +52,12 @@ type histogramData struct {
 	Label9     *string `parquet:"name=label9, type=BYTE_ARRAY"`
 	ACount     int64   `parquet:"name=a_count, type=INT64, convertedtype=UINT_64"`
 	OtherCount int64   `parquet:"name=other_count, type=INT64, convertedtype=UINT_64"`
+	// The hll.HLL structs are not expected to be included in the output
+	// parquet file, and thus do not need to be exported
+	v4ClientHLL           hll.Hll
+	v6ClientHLL           hll.Hll
+	V4ClientCountHLLBytes []byte `parquet:"name=v4client_count, type=MAP, convertedtype=LIST, valuetype=BYTE_ARRAY"`
+	V6ClientCountHLLBytes []byte `parquet:"name=v6client_count, type=MAP, convertedtype=LIST, valuetype=BYTE_ARRAY"`
 }
 
 func readConfig(configFile string) (dtmConfig, error) {
@@ -238,6 +250,18 @@ func main() {
 	dti.SetTimeout(time.Second * 5)
 	dti.SetLogger(log.Default())
 
+	// Set default values for HLL
+	err = hll.Defaults(hll.Settings{
+		Log2m:             10,
+		Regwidth:          4,
+		ExplicitThreshold: hll.AutoExplicitThreshold,
+		SparseEnabled:     true,
+	})
+	if err != nil {
+		slog.Error(err.Error())
+		os.Exit(1)
+	}
+
 	// Exit gracefully on SIGINT or SIGTERM
 	go func() {
 		sigs := make(chan os.Signal, 1)
@@ -300,16 +324,36 @@ type wellKnownDomainsTracker struct {
 	wellKnownDomainsData
 }
 
-// Basically a copy of wellKnownDomainsTracker without the lock as it is only
-// used for channel transportation of no longer active data
 type wellKnownDomainsData struct {
 	// Store a pointer to histogramCounters so we can assign to it without
 	// "cannot assign to struct field in map" issues
-	m          map[int]*histogramData
-	dawgFinder dawg.Finder
+	m             map[int]*histogramData
+	dawgFinder    dawg.Finder
+	murmur3Hasher hash.Hash64
 }
 
-func (wkd *wellKnownDomainsTracker) isKnown(q dns.Question) bool {
+func newWellKnownDomainsTracker(dawgFinder dawg.Finder) (*wellKnownDomainsTracker, error) {
+
+	// Create random uint32, rand.Int takes a half-open range so we give it [0,4294967296)
+	randInt, err := rand.Int(rand.Reader, big.NewInt(1<<32))
+	if err != nil {
+		return nil, err
+	}
+	murmur3Seed := uint32(randInt.Uint64())
+
+	murmur3Hasher := murmur3.New64WithSeed(murmur3Seed)
+
+	return &wellKnownDomainsTracker{
+		wellKnownDomainsData: wellKnownDomainsData{
+			m:             map[int]*histogramData{},
+			dawgFinder:    dawgFinder,
+			murmur3Hasher: murmur3Hasher,
+		},
+	}, nil
+}
+
+func (wkd *wellKnownDomainsTracker) isKnown(ipBytes []byte, q dns.Question) bool {
+
 	wkd.mutex.Lock()
 	defer wkd.mutex.Unlock()
 
@@ -326,6 +370,19 @@ func (wkd *wellKnownDomainsTracker) isKnown(q dns.Question) bool {
 		// the hot path of dealing with dnstap packets the less work we do the
 		// better. They are filled in prior to writing out the parquet file.
 		wkd.m[index] = &histogramData{}
+	}
+
+	// Create hash from IP address for use in HLL data
+	ip, ok := netip.AddrFromSlice(ipBytes)
+	if ok {
+		//fmt.Printf("ip: %s\n", ip.String())
+		wkd.murmur3Hasher.Write(ipBytes) // #nosec G104 -- Write() on hash.Hash never returns an error (https://pkg.go.dev/hash#Hash)
+		if ip.Unmap().Is4() {
+			wkd.m[index].v4ClientHLL.AddRaw(wkd.murmur3Hasher.Sum64())
+		} else {
+			wkd.m[index].v6ClientHLL.AddRaw(wkd.murmur3Hasher.Sum64())
+		}
+		wkd.murmur3Hasher.Reset()
 	}
 
 	switch q.Qtype {
@@ -419,11 +476,10 @@ func (dtf *dnstapFilter) runFilter(arrowPool *memory.GoAllocator, arrowSchema *a
 		os.Exit(1)
 	}
 
-	wkdTracker := &wellKnownDomainsTracker{
-		wellKnownDomainsData: wellKnownDomainsData{
-			m:          map[int]*histogramData{},
-			dawgFinder: dawgFinder,
-		},
+	wkdTracker, err := newWellKnownDomainsTracker(dawgFinder)
+	if err != nil {
+		slog.Error(err.Error())
+		os.Exit(1)
 	}
 
 filterLoop:
@@ -461,7 +517,9 @@ filterLoop:
 				continue
 			}
 
-			if wkdTracker.isKnown(msg.Question[0]) {
+			// We pass on the client address for cardinality
+			// measurements.
+			if wkdTracker.isKnown(dt.Message.QueryAddress, msg.Question[0]) {
 				dtf.log.Printf("skipping well-known domain %s", msg.Question[0].Name)
 				continue
 			}
@@ -496,7 +554,10 @@ filterLoop:
 				continue
 			}
 
-			histogramWriterCh <- prevWKD
+			// Only write out parquet file if there is something to write
+			if len(prevWKD.m) > 0 {
+				histogramWriterCh <- prevWKD
+			}
 
 		case <-dtf.stop:
 			break filterLoop
@@ -670,7 +731,7 @@ func writeHistogramParquet(dtf *dnstapFilter, prevWellKnownDomainsData *wellKnow
 
 	parquetWriter, err := writer.NewParquetWriterFromWriter(outFile, new(histogramData), 4)
 	if err != nil {
-		return err
+		return fmt.Errorf("writeHistogramParquet: %w", err)
 	}
 
 	for index, hGramData := range prevWellKnownDomainsData.m {
@@ -684,6 +745,13 @@ func writeHistogramParquet(dtf *dnstapFilter, prevWellKnownDomainsData *wellKnow
 
 		// Setting the labels now when we are out of the hot path.
 		setHistogramLabels(labels, labelLimit, hGramData)
+
+		dtf.log.Printf("ipv4 cardinality: %d", hGramData.v4ClientHLL.Cardinality())
+		dtf.log.Printf("ipv6 cardinality: %d", hGramData.v6ClientHLL.Cardinality())
+
+		// Write out the bytes from our hll data structures
+		hGramData.V4ClientCountHLLBytes = hGramData.v4ClientHLL.ToBytes()
+		hGramData.V6ClientCountHLLBytes = hGramData.v6ClientHLL.ToBytes()
 
 		err = parquetWriter.Write(hGramData)
 		if err != nil {
