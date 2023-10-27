@@ -464,16 +464,16 @@ func (dtf *dnstapFilter) runFilter(arrowPool *memory.GoAllocator, arrowSchema *a
 	// Keep track of if we have recorded any dnstap packets in arrow data
 	var arrow_updated bool
 
-	// Channel used to feed the output writer, buffered so we do not block
+	// Channel used to feed the session writer, buffered so we do not block
 	// filterLoop if writing is slow
-	parquetWriterCh := make(chan arrow.Record, 100)
+	sessionWriterCh := make(chan arrow.Record, 100)
 
 	// Channel used to feed the histogram writer, buffered so we do not block
 	// filterLoop if writing is slow
 	histogramWriterCh := make(chan *wellKnownDomainsData, 100)
 
 	// Start the record writers in the background
-	go parquetWriter(dtf, arrowSchema, parquetWriterCh)
+	go sessionWriter(dtf, arrowSchema, sessionWriterCh)
 	go histogramWriter(dtf, histogramWriterCh, labelLimit)
 
 	dawgFinder, err := dawg.Load(dawgFile)
@@ -551,7 +551,7 @@ filterLoop:
 				// We have created a record and therefore the recordbuilder is reset
 				arrow_updated = false
 
-				parquetWriterCh <- record
+				sessionWriterCh <- record
 			}
 
 			prevWKD, err := wkdTracker.rotateTracker(dawgFile)
@@ -575,10 +575,10 @@ filterLoop:
 	close(dtf.done)
 }
 
-func parquetWriter(dtf *dnstapFilter, arrowSchema *arrow.Schema, ch chan arrow.Record) {
+func sessionWriter(dtf *dnstapFilter, arrowSchema *arrow.Schema, ch chan arrow.Record) {
 	for {
 		record := <-ch
-		err := writeParquet(dtf, arrowSchema, record)
+		err := writeSession(dtf, arrowSchema, record)
 		if err != nil {
 			dtf.log.Printf(err.Error())
 		}
@@ -687,7 +687,7 @@ func setTimestamp(dtf *dnstapFilter, isQuery bool, timestamp time.Time, queryTim
 	}
 }
 
-func writeParquet(dtf *dnstapFilter, arrowSchema *arrow.Schema, record arrow.Record) error {
+func writeSession(dtf *dnstapFilter, arrowSchema *arrow.Schema, record arrow.Record) error {
 	defer record.Release()
 	outFileName := "/tmp/dns_session_block.parquet"
 	dtf.log.Printf("writing out parquet file %s", outFileName)
