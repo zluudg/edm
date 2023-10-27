@@ -145,6 +145,7 @@ func main() {
 	cryptoPanKey := flag.String("cryptopan-key", "", "override the secret used for Crypto-PAn pseudonymization")
 	cryptoPanKeySalt := flag.String("cryptopan-key-salt", "dtm-kdf-salt-val", "the salt used for key derivation")
 	dawgFile := flag.String("well-known-domains", "well-known-domains.dawg", "the dawg file used for filtering well-known domains")
+	dataDir := flag.String("data-dir", "/var/lib/dtm", "directory where output data is written")
 	flag.Parse()
 
 	// For now we only support a single output at a time
@@ -282,7 +283,7 @@ func main() {
 	defer dnsSessionRowBuilder.Release()
 
 	// Start filter
-	go dtf.runFilter(arrowPool, dnsSessionRowSchema, dnsSessionRowBuilder, *dawgFile)
+	go dtf.runFilter(arrowPool, dnsSessionRowSchema, dnsSessionRowBuilder, *dawgFile, *dataDir)
 
 	// Start dnstap.Output
 	go dnstapOutput.RunOutputLoop()
@@ -424,7 +425,7 @@ func (wkd *wellKnownDomainsTracker) rotateTracker(dawgFile string) (*wellKnownDo
 // runFilter reads frames from the inputChannel, doing any modifications and
 // then passes them on to a dnstap.Output. To gracefully stop
 // runFilter() you need to close the dtf.stop channel.
-func (dtf *dnstapFilter) runFilter(arrowPool *memory.GoAllocator, arrowSchema *arrow.Schema, dnsSessionRowBuilder *array.RecordBuilder, dawgFile string) {
+func (dtf *dnstapFilter) runFilter(arrowPool *memory.GoAllocator, arrowSchema *arrow.Schema, dnsSessionRowBuilder *array.RecordBuilder, dawgFile string, dataDir string) {
 	dt := &dnstap.Dnstap{}
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -473,8 +474,8 @@ func (dtf *dnstapFilter) runFilter(arrowPool *memory.GoAllocator, arrowSchema *a
 	histogramWriterCh := make(chan *wellKnownDomainsData, 100)
 
 	// Start the record writers in the background
-	go sessionWriter(dtf, arrowSchema, sessionWriterCh)
-	go histogramWriter(dtf, histogramWriterCh, labelLimit)
+	go sessionWriter(dtf, arrowSchema, sessionWriterCh, dataDir)
+	go histogramWriter(dtf, histogramWriterCh, labelLimit, dataDir)
 
 	dawgFinder, err := dawg.Load(dawgFile)
 	if err != nil {
@@ -575,10 +576,10 @@ filterLoop:
 	close(dtf.done)
 }
 
-func sessionWriter(dtf *dnstapFilter, arrowSchema *arrow.Schema, ch chan arrow.Record) {
+func sessionWriter(dtf *dnstapFilter, arrowSchema *arrow.Schema, ch chan arrow.Record, dataDir string) {
 	for {
 		record := <-ch
-		err := writeSession(dtf, arrowSchema, record)
+		err := writeSession(dtf, arrowSchema, record, dataDir)
 		if err != nil {
 			dtf.log.Printf(err.Error())
 		}
@@ -586,11 +587,11 @@ func sessionWriter(dtf *dnstapFilter, arrowSchema *arrow.Schema, ch chan arrow.R
 	}
 }
 
-func histogramWriter(dtf *dnstapFilter, ch chan *wellKnownDomainsData, labelLimit int) {
+func histogramWriter(dtf *dnstapFilter, ch chan *wellKnownDomainsData, labelLimit int, dataDir string) {
 	for {
 		prevWellKnownDomainsData := <-ch
 		dtf.log.Printf("in histogramWriter")
-		err := writeHistogramParquet(dtf, prevWellKnownDomainsData, labelLimit)
+		err := writeHistogramParquet(dtf, prevWellKnownDomainsData, labelLimit, dataDir)
 		if err != nil {
 			dtf.log.Printf(err.Error())
 		}
@@ -687,26 +688,56 @@ func setTimestamp(dtf *dnstapFilter, isQuery bool, timestamp time.Time, queryTim
 	}
 }
 
-func writeSession(dtf *dnstapFilter, arrowSchema *arrow.Schema, record arrow.Record) error {
+func writeSession(dtf *dnstapFilter, arrowSchema *arrow.Schema, record arrow.Record, dataDir string) error {
 	defer record.Release()
-	outFileName := "/tmp/dns_session_block.parquet"
-	dtf.log.Printf("writing out parquet file %s", outFileName)
-	outFile, err := os.Create(outFileName)
+
+	// Write session file to a sessions dir where it will be read by clickhouse
+	sessionsDir := filepath.Join(dataDir, "sessions")
+
+	absoluteTmpFileName, absoluteFileName := buildParquetFilenames(sessionsDir, "dns_session_block")
+
+	absoluteTmpFileName = filepath.Clean(absoluteTmpFileName) // Make gosec happy
+	dtf.log.Printf("writing out session parquet file %s", absoluteTmpFileName)
+	outFile, err := os.Create(absoluteTmpFileName)
 	if err != nil {
-		return fmt.Errorf("writeSession: unable to open %s: %w", outFileName, err)
+		return fmt.Errorf("writeSession: unable to open session file: %w", err)
 	}
-	// No need to defer outFile.Close(), handled by parquetWriter.Close() below.
+	fileOpen := true
+	defer func() {
+		// Closing a *os.File twice returns an error, so only do it if
+		// we have not already tried to close it.
+		if fileOpen {
+			err := outFile.Close()
+			if err != nil {
+				dtf.log.Printf("writeSession: unable to do deferred close of outFile: %w", err)
+			}
+		}
+	}()
 
 	parquetWriter, err := pqarrow.NewFileWriter(arrowSchema, outFile, nil, pqarrow.DefaultWriterProps())
 	if err != nil {
 		return fmt.Errorf("writeSession: unable to create parquet writer: %w", err)
 	}
+	defer func() {
+		err := parquetWriter.Close()
+		// Closing the parquetWriter automatically closes the underlying file
+		fileOpen = false
+		if err != nil {
+			dtf.log.Printf("writeSession: unable to do deferred close of parquetWriter: %w", err)
+		}
+	}()
 
 	err = parquetWriter.Write(record)
 	if err != nil {
 		return fmt.Errorf("writeSession: unable to write parquet file: %w", err)
 	}
+
 	err = parquetWriter.Close()
+	// Closing the parquetWriter automatically closes the underlying file
+	// so lets not try do it again in the deferred func when we return. At
+	// the same time it is documented to be a no-op to call Close() on the
+	// parquetWriter multiple times, so just let that one be called again.
+	fileOpen = false
 	if err != nil {
 		return fmt.Errorf("writeSession: unable to close parquet file: %w", err)
 	}
@@ -717,21 +748,56 @@ func writeSession(dtf *dnstapFilter, arrowSchema *arrow.Schema, record arrow.Rec
 	}
 	fmt.Println(string(jsonBytes))
 
+	dtf.log.Printf("renaming session file '%s' -> '%s'", absoluteTmpFileName, absoluteFileName)
+	err = os.Rename(absoluteTmpFileName, absoluteFileName)
+	if err != nil {
+		return fmt.Errorf("writeSession: unable to rename output file: %w", err)
+	}
+
 	return nil
 }
 
-func writeHistogramParquet(dtf *dnstapFilter, prevWellKnownDomainsData *wellKnownDomainsData, labelLimit int) error {
+func buildParquetFilenames(baseDir string, baseName string) (string, string) {
+	// Use timestamp for files, replace ":" with "-" to not have to escape
+	// characters in the shell, e.g: 2009-11-10T23-00-00Z
+	datetime := strings.ReplaceAll(time.Now().UTC().Format(time.RFC3339), ":", "-")
+	fileName := baseName + "-" + datetime + ".parquet"
+
+	// Write output to a .tmp file so we can atomically rename it to the real
+	// name when the file has been written in full
+	tmpFileName := fileName + ".tmp"
+
+	absoluteFileName := filepath.Join(baseDir, fileName)
+	absoluteTmpFileName := filepath.Join(baseDir, tmpFileName)
+
+	return absoluteTmpFileName, absoluteFileName
+}
+
+func writeHistogramParquet(dtf *dnstapFilter, prevWellKnownDomainsData *wellKnownDomainsData, labelLimit int, dataDir string) error {
 	dtf.log.Printf("in writeHistogramParquet")
-	outFileName := "/tmp/dns_histogram.parquet"
-	//dtf.log.Printf("writing out histogram file %s", outFileName)
-	outFile, err := os.Create(outFileName)
+
+	// Write histogram file to an outbox dir where it will get picked up by
+	// the histogram sender
+	outboxDir := filepath.Join(dataDir, "histograms", "outbox")
+
+	absoluteTmpFileName, absoluteFileName := buildParquetFilenames(outboxDir, "dns_histogram")
+
+	dtf.log.Printf("writing out histogram file %s", absoluteTmpFileName)
+
+	absoluteTmpFileName = filepath.Clean(absoluteTmpFileName)
+	outFile, err := os.Create(absoluteTmpFileName)
 	if err != nil {
-		return fmt.Errorf("writeHistogramParquet: unable to open %s: %w", outFileName, err)
+		return fmt.Errorf("writeHistogramParquet: unable to open histogram file: %w", err)
 	}
+	fileOpen := true
 	defer func() {
-		err := outFile.Close()
-		if err != nil {
-			dtf.log.Printf("writeHistogramParquet: unable to close histogram outfile: %w", err)
+		// Closing a *os.File twice returns an error, so only do it if
+		// we have not already tried to close it.
+		if fileOpen {
+			err := outFile.Close()
+			if err != nil {
+				dtf.log.Printf("writeHistogramParquet: unable to do deferred close of histogram outFile: %w", err)
+			}
 		}
 	}()
 
@@ -768,6 +834,21 @@ func writeHistogramParquet(dtf *dnstapFilter, prevWellKnownDomainsData *wellKnow
 	err = parquetWriter.WriteStop()
 	if err != nil {
 		return fmt.Errorf("writeHistogramParquet: unable to call WriteStop() on parquet writer: %w", err)
+	}
+
+	// We need to close the file before renaming it
+	err = outFile.Close()
+	// at this point we do not want the defer to close the file for us when returning
+	fileOpen = false
+	if err != nil {
+		return fmt.Errorf("writeHistogramParquet: unable to call WriteStop() on parquet writer: %w", err)
+	}
+
+	// Atomically rename the file to its real name so it can be picked up by the histogram sender
+	dtf.log.Printf("renaming histogram file '%s' -> '%s'", absoluteTmpFileName, absoluteFileName)
+	err = os.Rename(absoluteTmpFileName, absoluteFileName)
+	if err != nil {
+		return fmt.Errorf("writeHistogramParquet: unable to rename output file: %w", err)
 	}
 
 	return nil
