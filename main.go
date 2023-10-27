@@ -767,7 +767,7 @@ func writeHistogramParquet(dtf *dnstapFilter, prevWellKnownDomainsData *wellKnow
 	return nil
 }
 
-// Anonymize IP address fields in a dnstap message
+// Pseudonymize IP address fields in a dnstap message
 func (dtf *dnstapFilter) pseudonymizeDnstap(dt *dnstap.Dnstap) {
 	dt.Message.QueryAddress = dtf.cryptopan.Anonymize(net.IP(dt.Message.QueryAddress))
 	dt.Message.ResponseAddress = dtf.cryptopan.Anonymize(net.IP(dt.Message.ResponseAddress))
