@@ -46,16 +46,16 @@ type histogramData struct {
 	// otherwise: "panic: reflect: reflect.Value.SetString using value obtained using unexported field"
 	// Also store them as pointers so we can signal them being unset as
 	// opposed to an empty string
-	Label0     *string `parquet:"name=label0, type=BYTE_ARRAY"`
-	Label1     *string `parquet:"name=label1, type=BYTE_ARRAY"`
-	Label2     *string `parquet:"name=label2, type=BYTE_ARRAY"`
-	Label3     *string `parquet:"name=label3, type=BYTE_ARRAY"`
-	Label4     *string `parquet:"name=label4, type=BYTE_ARRAY"`
-	Label5     *string `parquet:"name=label5, type=BYTE_ARRAY"`
-	Label6     *string `parquet:"name=label6, type=BYTE_ARRAY"`
-	Label7     *string `parquet:"name=label7, type=BYTE_ARRAY"`
-	Label8     *string `parquet:"name=label8, type=BYTE_ARRAY"`
-	Label9     *string `parquet:"name=label9, type=BYTE_ARRAY"`
+	Label0     *string `parquet:"name=label0, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label1     *string `parquet:"name=label1, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label2     *string `parquet:"name=label2, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label3     *string `parquet:"name=label3, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label4     *string `parquet:"name=label4, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label5     *string `parquet:"name=label5, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label6     *string `parquet:"name=label6, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label7     *string `parquet:"name=label7, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label8     *string `parquet:"name=label8, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label9     *string `parquet:"name=label9, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
 	ACount     int64   `parquet:"name=a_count, type=INT64, convertedtype=UINT_64"`
 	OtherCount int64   `parquet:"name=other_count, type=INT64, convertedtype=UINT_64"`
 	// The hll.HLL structs are not expected to be included in the output
