@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"crypto/ecdsa"
 	"crypto/rand"
 	"flag"
 	"fmt"
@@ -9,9 +11,12 @@ import (
 	"log/slog"
 	"math/big"
 	"net"
+	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -30,6 +35,7 @@ import (
 	"github.com/smhanov/dawg"
 	"github.com/spaolacci/murmur3"
 	"github.com/xitongsys/parquet-go/writer"
+	"github.com/yaronf/httpsign"
 	"github.com/yawning/cryptopan"
 	"golang.org/x/crypto/argon2"
 	"google.golang.org/protobuf/proto"
@@ -771,4 +777,89 @@ func writeHistogramParquet(dtf *dnstapFilter, prevWellKnownDomainsData *wellKnow
 func (dtf *dnstapFilter) pseudonymizeDnstap(dt *dnstap.Dnstap) {
 	dt.Message.QueryAddress = dtf.cryptopan.Anonymize(net.IP(dt.Message.QueryAddress))
 	dt.Message.ResponseAddress = dtf.cryptopan.Anonymize(net.IP(dt.Message.ResponseAddress))
+}
+
+// Send histogram data via signed HTTP message to aggregate-receiver (https://github.com/dnstapir/aggregate-receiver)
+func sendHistogramParquet(aggrecURL url.URL, fileName string, privKey *ecdsa.PrivateKey) error {
+
+	baseDir := "/var/lib/dtm"
+	histogramFileName := filepath.Join(baseDir, fileName)
+
+	histogramFileName = filepath.Clean(histogramFileName)
+
+	if !strings.HasPrefix(histogramFileName, baseDir+"/") {
+		return fmt.Errorf("sendHistogramParquet: bad prefix for histogram directory: '%s', must start with: '%s'", histogramFileName, baseDir)
+	}
+	file, err := os.Open(histogramFileName)
+	if err != nil {
+		return fmt.Errorf("sendAggregateFile: unable to open file: %w", err)
+	}
+
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("sendAggregateFile: unable to stat file: %w", err)
+	}
+
+	fileSize := fileInfo.Size()
+
+	// Set some timouts to protect from hanging connections
+	httpClient := http.Client{
+		Transport: &http.Transport{
+			Dial: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).Dial,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 10 * time.Second,
+		},
+	}
+
+	// Create signer and wrapped HTTP client
+	signer, _ := httpsign.NewP256Signer("key1", *privKey,
+		httpsign.NewSignConfig(),
+		httpsign.Headers("content-type", "content-length", "content-digest")) // The Content-Digest header will be auto-generated
+	client := httpsign.NewClient(httpClient, httpsign.NewClientConfig().SetSignatureName("sig1").SetSigner(signer)) // sign requests, don't verify responses
+
+	// Send signed HTTP POST message
+	req, err := http.NewRequest("POST", aggrecURL.String(), bufio.NewReader(file))
+	if err != nil {
+		return fmt.Errorf("sendAggregateFile: unable to create request: %w", err)
+	}
+
+	// From https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-digest-headers-13#section-6.3:
+	// ===
+	// Digests explicitly depend on the "representation metadata" (e.g.,
+	// the values of Content-Type, Content-Encoding etc.). A signature that
+	// protects Integrity fields but not other "representation metadata"
+	// can expose the communication to tampering.
+	// ===
+	req.Header.Add("Content-Type", "application/vnd.apache.parquet")
+
+	// This is set automatically by the transport, but we need to add it
+	// here as well to make the signer see it, otherwise it errors out:
+	// ===
+	// failed to sign request: header content-length not found
+	// ===
+	req.Header.Add("Content-Length", strconv.FormatInt(fileSize, 10))
+
+	// Beacuse we are using a bufio.Reader we need to set the length
+	// here as well, otherwise net/http will set the header
+	// "Transfer-Encoding: chunked" and remove the Content-Length header.
+	req.ContentLength = fileSize
+
+	res, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("sendAggregateFile: unable to send request: %w", err)
+	}
+
+	err = res.Body.Close()
+	if err != nil {
+		return fmt.Errorf("sendAggregateFile: unable to close HTTP body: %w", err)
+	}
+
+	if res.StatusCode != http.StatusOK {
+		return fmt.Errorf("sendAggregateFile: unexpected status code: %d", res.StatusCode)
+	}
+
+	return nil
 }

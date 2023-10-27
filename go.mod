@@ -11,6 +11,7 @@ require (
 	github.com/smhanov/dawg v0.0.0-20220118194912-66057bdbf2e3
 	github.com/spaolacci/murmur3 v1.1.0
 	github.com/xitongsys/parquet-go v1.6.2
+	github.com/yaronf/httpsign v0.1.16
 	github.com/yawning/cryptopan v0.0.0-20170504040949-65bca51288fe
 	golang.org/x/crypto v0.13.0
 	google.golang.org/protobuf v1.31.0
@@ -21,6 +22,8 @@ require (
 	github.com/andybalholm/brotli v1.0.5 // indirect
 	github.com/apache/arrow/go/arrow v0.0.0-20200730104253-651201b0f516 // indirect
 	github.com/apache/thrift v0.19.0 // indirect
+	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.1.0 // indirect
+	github.com/dunglas/httpsfv v1.0.1 // indirect
 	github.com/farsightsec/golang-framestream v0.3.0 // indirect
 	github.com/goccy/go-json v0.10.2 // indirect
 	github.com/golang/protobuf v1.5.3 // indirect
@@ -29,6 +32,12 @@ require (
 	github.com/klauspost/asmfmt v1.3.2 // indirect
 	github.com/klauspost/compress v1.16.7 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.5 // indirect
+	github.com/lestrrat-go/blackmagic v1.0.1 // indirect
+	github.com/lestrrat-go/httpcc v1.0.1 // indirect
+	github.com/lestrrat-go/httprc v1.0.4 // indirect
+	github.com/lestrrat-go/iter v1.0.2 // indirect
+	github.com/lestrrat-go/jwx/v2 v2.0.6 // indirect
+	github.com/lestrrat-go/option v1.0.0 // indirect
 	github.com/minio/asm2plan9s v0.0.0-20200509001527-cdd76441f9d8 // indirect
 	github.com/minio/c2goasm v0.0.0-20190812172519-36a3d3bbc4f3 // indirect
 	github.com/pierrec/lz4/v4 v4.1.18 // indirect
