@@ -311,7 +311,7 @@ type dnstapFilter struct {
 func newDnstapFilter(logger dnstap.Logger, dnstapOutput dnstap.Output, cryptoPanKey []byte, debug bool) (*dnstapFilter, error) {
 	cpn, err := cryptopan.New(cryptoPanKey)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("newDnstapFilter: %w", err)
 	}
 	dtf := &dnstapFilter{}
 	dtf.cryptopan = cpn
@@ -343,7 +343,7 @@ func newWellKnownDomainsTracker(dawgFinder dawg.Finder) (*wellKnownDomainsTracke
 	// Create random uint32, rand.Int takes a half-open range so we give it [0,4294967296)
 	randInt, err := rand.Int(rand.Reader, big.NewInt(1<<32))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("newWellKnownDomainsTracker: %w", err)
 	}
 	murmur3Seed := uint32(randInt.Uint64())
 
@@ -405,7 +405,7 @@ func (wkd *wellKnownDomainsTracker) rotateTracker(dawgFile string) (*wellKnownDo
 
 	dawgFinder, err := dawg.Load(dawgFile)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("rotateTracker: dawg.Load(): %w", err)
 	}
 
 	prevWKD := &wellKnownDomainsData{}
@@ -693,27 +693,27 @@ func writeSession(dtf *dnstapFilter, arrowSchema *arrow.Schema, record arrow.Rec
 	dtf.log.Printf("writing out parquet file %s", outFileName)
 	outFile, err := os.Create(outFileName)
 	if err != nil {
-		return fmt.Errorf("unable to open %s", outFileName)
+		return fmt.Errorf("writeSession: unable to open %s: %w", outFileName, err)
 	}
 	// No need to defer outFile.Close(), handled by parquetWriter.Close() below.
 
 	parquetWriter, err := pqarrow.NewFileWriter(arrowSchema, outFile, nil, pqarrow.DefaultWriterProps())
 	if err != nil {
-		return fmt.Errorf("unable to create parquet writer: %w", err)
+		return fmt.Errorf("writeSession: unable to create parquet writer: %w", err)
 	}
 
 	err = parquetWriter.Write(record)
 	if err != nil {
-		return fmt.Errorf("unable to write parquet file: %w", err)
+		return fmt.Errorf("writeSession: unable to write parquet file: %w", err)
 	}
 	err = parquetWriter.Close()
 	if err != nil {
-		return fmt.Errorf("unable to close parquet file: %w", err)
+		return fmt.Errorf("writeSession: unable to close parquet file: %w", err)
 	}
 
 	jsonBytes, err := record.MarshalJSON()
 	if err != nil {
-		return fmt.Errorf("error marshalling json fron rec: %w", err)
+		return fmt.Errorf("writeSession: error marshalling json fron rec: %w", err)
 	}
 	fmt.Println(string(jsonBytes))
 
@@ -726,24 +726,24 @@ func writeHistogramParquet(dtf *dnstapFilter, prevWellKnownDomainsData *wellKnow
 	//dtf.log.Printf("writing out histogram file %s", outFileName)
 	outFile, err := os.Create(outFileName)
 	if err != nil {
-		return fmt.Errorf("unable to open %s", outFileName)
+		return fmt.Errorf("writeHistogramParquet: unable to open %s: %w", outFileName, err)
 	}
 	defer func() {
 		err := outFile.Close()
 		if err != nil {
-			dtf.log.Printf("unable to close histogram outfile: %s", err)
+			dtf.log.Printf("writeHistogramParquet: unable to close histogram outfile: %w", err)
 		}
 	}()
 
 	parquetWriter, err := writer.NewParquetWriterFromWriter(outFile, new(histogramData), 4)
 	if err != nil {
-		return fmt.Errorf("writeHistogramParquet: %w", err)
+		return fmt.Errorf("writeHistogramParquet: unable to create parquet writer: %w", err)
 	}
 
 	for index, hGramData := range prevWellKnownDomainsData.m {
 		domain, err := prevWellKnownDomainsData.dawgFinder.AtIndex(index)
 		if err != nil {
-			return err
+			return fmt.Errorf("writeHistogramParquet: unable to find DAWG index %d: %w", index, err)
 		}
 		fmt.Printf("%s: %#v\n", domain, *hGramData)
 
@@ -761,13 +761,13 @@ func writeHistogramParquet(dtf *dnstapFilter, prevWellKnownDomainsData *wellKnow
 
 		err = parquetWriter.Write(hGramData)
 		if err != nil {
-			return err
+			return fmt.Errorf("writeHistogramParquet: unable to call Write() on parquet writer: %w", err)
 		}
 	}
 
 	err = parquetWriter.WriteStop()
 	if err != nil {
-		return fmt.Errorf("unable to call WriteStop on parquet writer: %w", err)
+		return fmt.Errorf("writeHistogramParquet: unable to call WriteStop() on parquet writer: %w", err)
 	}
 
 	return nil
