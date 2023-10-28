@@ -1,4 +1,4 @@
-module dtm
+module github.com/dnstapir/dtm
 
 go 1.20
 
