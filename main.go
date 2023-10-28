@@ -343,7 +343,7 @@ func (wkd *wellKnownDomainsTracker) isKnown(ipBytes []byte, msg *dns.Msg) bool {
 		wkd.murmur3Hasher.Reset()
 	}
 
-	// Count stats in header
+	// Counters based on header
 	switch msg.Rcode {
 	case dns.RcodeSuccess:
 		wkd.m[index].OKCount++
@@ -353,7 +353,7 @@ func (wkd *wellKnownDomainsTracker) isKnown(ipBytes []byte, msg *dns.Msg) bool {
 		wkd.m[index].FailCount++
 	}
 
-	// Count status based on question class and type
+	// Counters based on question class and type
 	if msg.Question[0].Qclass == dns.ClassINET {
 		switch msg.Question[0].Qtype {
 		case dns.TypeA:
