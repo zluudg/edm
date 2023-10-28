@@ -29,7 +29,7 @@ Usage of dtm:
 ## Usage
 Using the tool requires the creation of a TOML config file for holding the
 crypto-PAn secret (by default the config is read from the current working
- directory) as well as a well-known-domains.dawg file which can be created
+ directory) as well as a `well-known-domains.dawg` file which can be created
 using https://github.com/dnstapir/dtm-dawg-maker
 
 Basic usage, writing output files to a directory structure under `/var/lib/dtm`
