@@ -692,7 +692,7 @@ func writeSession(dtf *dnstapFilter, arrowSchema *arrow.Schema, record arrow.Rec
 	defer record.Release()
 
 	// Write session file to a sessions dir where it will be read by clickhouse
-	sessionsDir := filepath.Join(dataDir, "sessions")
+	sessionsDir := filepath.Join(dataDir, "parquet", "sessions")
 
 	absoluteTmpFileName, absoluteFileName := buildParquetFilenames(sessionsDir, "dns_session_block")
 
@@ -778,7 +778,7 @@ func writeHistogramParquet(dtf *dnstapFilter, prevWellKnownDomainsData *wellKnow
 
 	// Write histogram file to an outbox dir where it will get picked up by
 	// the histogram sender
-	outboxDir := filepath.Join(dataDir, "histograms", "outbox")
+	outboxDir := filepath.Join(dataDir, "parquet", "histograms", "outbox")
 
 	absoluteTmpFileName, absoluteFileName := buildParquetFilenames(outboxDir, "dns_histogram")
 
