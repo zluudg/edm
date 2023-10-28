@@ -195,8 +195,8 @@ func main() {
 
 	arrowPool := memory.NewGoAllocator()
 
-	// Create an instance of the filter
-	dtf, err := newDnstapFilter(log.Default(), aesKey, *debug)
+	// Create an instance of the minimiser
+	dtm, err := newDnstapMinimiser(log.Default(), aesKey, *debug)
 	if err != nil {
 		slog.Error(err.Error())
 		os.Exit(1)
@@ -229,52 +229,52 @@ func main() {
 		signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
 		<-sigs
 
-		// We received a signal, tell runFilter() to stop
-		close(dtf.stop)
+		// We received a signal, tell runMinimiser() to stop
+		close(dtm.stop)
 	}()
 
 	dnsSessionRowBuilder := array.NewRecordBuilder(arrowPool, dnsSessionRowSchema)
 	defer dnsSessionRowBuilder.Release()
 
-	// Start filter
-	go dtf.runFilter(arrowPool, dnsSessionRowSchema, dnsSessionRowBuilder, *dawgFile, *dataDir)
+	// Start minimiser
+	go dtm.runMinimiser(arrowPool, dnsSessionRowSchema, dnsSessionRowBuilder, *dawgFile, *dataDir)
 
 	// Start dnstap.Input
-	go dti.ReadInto(dtf.inputChannel)
+	go dti.ReadInto(dtm.inputChannel)
 
-	// Wait here until runFilter() is done
-	<-dtf.done
+	// Wait here until runMinimiser() is done
+	<-dtm.done
 }
 
 type dtmConfig struct {
 	CryptoPanKey string `toml:"cryptopan-key"`
 }
 
-type dnstapFilter struct {
+type dnstapMinimiser struct {
 	inputChannel chan []byte          // the channel expected to be passed to dnstap ReadInto()
 	log          dnstap.Logger        // any information logging is sent here
 	cryptopan    *cryptopan.Cryptopan // used for pseudonymizing IP addresses
-	stop         chan struct{}        // close this channel to gracefully stop runFilter()
+	stop         chan struct{}        // close this channel to gracefully stop runMinimiser()
 	done         chan struct{}        // block on this channel to make sure output is flushed before exiting
 	debug        bool                 // if we should print debug messages during operation
 }
 
-func newDnstapFilter(logger dnstap.Logger, cryptoPanKey []byte, debug bool) (*dnstapFilter, error) {
+func newDnstapMinimiser(logger dnstap.Logger, cryptoPanKey []byte, debug bool) (*dnstapMinimiser, error) {
 	cpn, err := cryptopan.New(cryptoPanKey)
 	if err != nil {
-		return nil, fmt.Errorf("newDnstapFilter: %w", err)
+		return nil, fmt.Errorf("newDnstapMinimiser: %w", err)
 	}
-	dtf := &dnstapFilter{}
-	dtf.cryptopan = cpn
-	dtf.stop = make(chan struct{})
-	dtf.done = make(chan struct{})
+	dtm := &dnstapMinimiser{}
+	dtm.cryptopan = cpn
+	dtm.stop = make(chan struct{})
+	dtm.done = make(chan struct{})
 	// Size 32 matches unexported "const outputChannelSize = 32" in
 	// https://github.com/dnstap/golang-dnstap/blob/master/dnstap.go
-	dtf.inputChannel = make(chan []byte, 32)
-	dtf.log = logger
-	dtf.debug = debug
+	dtm.inputChannel = make(chan []byte, 32)
+	dtm.log = logger
+	dtm.debug = debug
 
-	return dtf, nil
+	return dtm, nil
 }
 
 type wellKnownDomainsTracker struct {
@@ -394,10 +394,10 @@ func (wkd *wellKnownDomainsTracker) rotateTracker(dawgFile string) (*wellKnownDo
 	return prevWKD, nil
 }
 
-// runFilter reads frames from the inputChannel, doing any modifications and
+// runMinimiser reads frames from the inputChannel, doing any modifications and
 // then passes them on to a dnstap.Output. To gracefully stop
-// runFilter() you need to close the dtf.stop channel.
-func (dtf *dnstapFilter) runFilter(arrowPool *memory.GoAllocator, arrowSchema *arrow.Schema, dnsSessionRowBuilder *array.RecordBuilder, dawgFile string, dataDir string) {
+// runMinimiser() you need to close the dtm.stop channel.
+func (dtm *dnstapMinimiser) runMinimiser(arrowPool *memory.GoAllocator, arrowSchema *arrow.Schema, dnsSessionRowBuilder *array.RecordBuilder, dawgFile string, dataDir string) {
 	dt := &dnstap.Dnstap{}
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -438,16 +438,16 @@ func (dtf *dnstapFilter) runFilter(arrowPool *memory.GoAllocator, arrowSchema *a
 	var arrow_updated bool
 
 	// Channel used to feed the session writer, buffered so we do not block
-	// filterLoop if writing is slow
+	// minimiserLoop if writing is slow
 	sessionWriterCh := make(chan arrow.Record, 100)
 
 	// Channel used to feed the histogram writer, buffered so we do not block
-	// filterLoop if writing is slow
+	// minimiserLoop if writing is slow
 	histogramWriterCh := make(chan *wellKnownDomainsData, 100)
 
 	// Start the record writers in the background
-	go sessionWriter(dtf, arrowSchema, sessionWriterCh, dataDir)
-	go histogramWriter(dtf, histogramWriterCh, labelLimit, dataDir)
+	go sessionWriter(dtm, arrowSchema, sessionWriterCh, dataDir)
+	go histogramWriter(dtm, histogramWriterCh, labelLimit, dataDir)
 
 	dawgFinder, err := dawg.Load(dawgFile)
 	if err != nil {
@@ -461,13 +461,13 @@ func (dtf *dnstapFilter) runFilter(arrowPool *memory.GoAllocator, arrowSchema *a
 		os.Exit(1)
 	}
 
-filterLoop:
+minimiserLoop:
 	for {
 		select {
-		case frame := <-dtf.inputChannel:
+		case frame := <-dtm.inputChannel:
 			if err := proto.Unmarshal(frame, dt); err != nil {
-				dtf.log.Printf("dnstapFilter.runFilter: proto.Unmarshal() failed: %s, returning", err)
-				break filterLoop
+				dtm.log.Printf("dnstapMinimiser.runMinimiser: proto.Unmarshal() failed: %s, returning", err)
+				break minimiserLoop
 			}
 
 			isQuery := strings.HasSuffix(dnstap.Message_Type_name[int32(*dt.Message.Type)], "_QUERY")
@@ -477,35 +477,35 @@ filterLoop:
 				continue
 			}
 
-			if dtf.debug {
-				dtf.log.Printf("dnstapFilter.runFilter: modifying dnstap message")
+			if dtm.debug {
+				dtm.log.Printf("dnstapMinimiser.runMinimiser: modifying dnstap message")
 			}
-			dtf.pseudonymizeDnstap(dt)
+			dtm.pseudonymizeDnstap(dt)
 
 			msg, timestamp := parsePacket(dt, isQuery)
 
 			// For cases where we were unable to unpack the DNS message we
 			// skip parsing.
 			if msg == nil || len(msg.Question) == 0 {
-				dtf.log.Printf("unable to parse dnstap message, or no question section, skipping parsing")
+				dtm.log.Printf("unable to parse dnstap message, or no question section, skipping parsing")
 				continue
 			}
 
 			if _, ok := dns.IsDomainName(msg.Question[0].Name); !ok {
-				dtf.log.Printf("unable to parse question name, skipping parsing")
+				dtm.log.Printf("unable to parse question name, skipping parsing")
 				continue
 			}
 
 			// We pass on the client address for cardinality
 			// measurements.
 			if wkdTracker.isKnown(dt.Message.QueryAddress, msg) {
-				dtf.log.Printf("skipping well-known domain %s", msg.Question[0].Name)
+				dtm.log.Printf("skipping well-known domain %s", msg.Question[0].Name)
 				continue
 			}
 
-			setLabels(dtf, msg, labelLimit, labelSlice)
+			setLabels(dtm, msg, labelLimit, labelSlice)
 
-			setTimestamp(dtf, isQuery, timestamp, queryTime, responseTime)
+			setTimestamp(dtm, isQuery, timestamp, queryTime, responseTime)
 
 			// Since we have set fields in the arrow data at this
 			// point we have things to write out
@@ -521,7 +521,7 @@ filterLoop:
 
 			prevWKD, err := wkdTracker.rotateTracker(dawgFile)
 			if err != nil {
-				dtf.log.Printf("unable to rotate histogram map: %s", err)
+				dtm.log.Printf("unable to rotate histogram map: %s", err)
 				continue
 			}
 
@@ -530,32 +530,32 @@ filterLoop:
 				histogramWriterCh <- prevWKD
 			}
 
-		case <-dtf.stop:
-			break filterLoop
+		case <-dtm.stop:
+			break minimiserLoop
 		}
 	}
 	// Signal main() that we are done and ready to exit
-	close(dtf.done)
+	close(dtm.done)
 }
 
-func sessionWriter(dtf *dnstapFilter, arrowSchema *arrow.Schema, ch chan arrow.Record, dataDir string) {
+func sessionWriter(dtm *dnstapMinimiser, arrowSchema *arrow.Schema, ch chan arrow.Record, dataDir string) {
 	for {
 		record := <-ch
-		err := writeSession(dtf, arrowSchema, record, dataDir)
+		err := writeSession(dtm, arrowSchema, record, dataDir)
 		if err != nil {
-			dtf.log.Printf(err.Error())
+			dtm.log.Printf(err.Error())
 		}
 
 	}
 }
 
-func histogramWriter(dtf *dnstapFilter, ch chan *wellKnownDomainsData, labelLimit int, dataDir string) {
+func histogramWriter(dtm *dnstapMinimiser, ch chan *wellKnownDomainsData, labelLimit int, dataDir string) {
 	for {
 		prevWellKnownDomainsData := <-ch
-		dtf.log.Printf("in histogramWriter")
-		err := writeHistogramParquet(dtf, prevWellKnownDomainsData, labelLimit, dataDir)
+		dtm.log.Printf("in histogramWriter")
+		err := writeHistogramParquet(dtm, prevWellKnownDomainsData, labelLimit, dataDir)
 		if err != nil {
-			dtf.log.Printf(err.Error())
+			dtm.log.Printf(err.Error())
 		}
 
 	}
@@ -602,38 +602,38 @@ func parsePacket(dt *dnstap.Dnstap, isQuery bool) (*dns.Msg, time.Time) {
 	return msg, t
 }
 
-func setLabels(dtf *dnstapFilter, msg *dns.Msg, labelLimit int, labelSlice []*array.StringBuilder) {
+func setLabels(dtm *dnstapMinimiser, msg *dns.Msg, labelLimit int, labelSlice []*array.StringBuilder) {
 	labels := dns.SplitDomainName(msg.Question[0].Name)
 
 	// labels is nil if this is the root domain (.)
 	if labels == nil {
-		dtf.log.Printf("setting all labels to null")
+		dtm.log.Printf("setting all labels to null")
 		for _, arrowLabel := range labelSlice {
 			arrowLabel.AppendNull()
 		}
 	} else {
 		reverseLabels := reverseLabelsBounded(labels, labelLimit)
 		for i, label := range reverseLabels {
-			dtf.log.Printf("setting label%d to %s", i, label)
+			dtm.log.Printf("setting label%d to %s", i, label)
 			labelSlice[i].Append(label)
 		}
 
 		// Fill out remaining labels with null if needed
 		if len(reverseLabels) < labelLimit {
 			for i := len(reverseLabels); i < labelLimit; i++ {
-				dtf.log.Printf("setting remaining label%d to null\n", i)
+				dtm.log.Printf("setting remaining label%d to null\n", i)
 				labelSlice[i].AppendNull()
 			}
 		}
 	}
 }
 
-func setTimestamp(dtf *dnstapFilter, isQuery bool, timestamp time.Time, queryTime *array.TimestampBuilder, responseTime *array.TimestampBuilder) {
+func setTimestamp(dtm *dnstapMinimiser, isQuery bool, timestamp time.Time, queryTime *array.TimestampBuilder, responseTime *array.TimestampBuilder) {
 	if isQuery {
 		responseTime.AppendNull()
 		arrowTimeQuery, err := arrow.TimestampFromTime(timestamp, arrow.Nanosecond)
 		if err != nil {
-			dtf.log.Printf("unable to parse query_time: %s, appending null", err)
+			dtm.log.Printf("unable to parse query_time: %s, appending null", err)
 			queryTime.AppendNull()
 		} else {
 			queryTime.Append(arrowTimeQuery)
@@ -642,7 +642,7 @@ func setTimestamp(dtf *dnstapFilter, isQuery bool, timestamp time.Time, queryTim
 		queryTime.AppendNull()
 		arrowTimeResponse, err := arrow.TimestampFromTime(timestamp, arrow.Nanosecond)
 		if err != nil {
-			dtf.log.Printf("unable to parse response_time: %s, appending null", err)
+			dtm.log.Printf("unable to parse response_time: %s, appending null", err)
 			responseTime.AppendNull()
 		} else {
 			responseTime.Append(arrowTimeResponse)
@@ -650,7 +650,7 @@ func setTimestamp(dtf *dnstapFilter, isQuery bool, timestamp time.Time, queryTim
 	}
 }
 
-func writeSession(dtf *dnstapFilter, arrowSchema *arrow.Schema, record arrow.Record, dataDir string) error {
+func writeSession(dtm *dnstapMinimiser, arrowSchema *arrow.Schema, record arrow.Record, dataDir string) error {
 	defer record.Release()
 
 	// Write session file to a sessions dir where it will be read by clickhouse
@@ -659,7 +659,7 @@ func writeSession(dtf *dnstapFilter, arrowSchema *arrow.Schema, record arrow.Rec
 	absoluteTmpFileName, absoluteFileName := buildParquetFilenames(sessionsDir, "dns_session_block")
 
 	absoluteTmpFileName = filepath.Clean(absoluteTmpFileName) // Make gosec happy
-	dtf.log.Printf("writing out session parquet file %s", absoluteTmpFileName)
+	dtm.log.Printf("writing out session parquet file %s", absoluteTmpFileName)
 	outFile, err := os.Create(absoluteTmpFileName)
 	if err != nil {
 		return fmt.Errorf("writeSession: unable to open session file: %w", err)
@@ -671,7 +671,7 @@ func writeSession(dtf *dnstapFilter, arrowSchema *arrow.Schema, record arrow.Rec
 		if fileOpen {
 			err := outFile.Close()
 			if err != nil {
-				dtf.log.Printf("writeSession: unable to do deferred close of outFile: %w", err)
+				dtm.log.Printf("writeSession: unable to do deferred close of outFile: %w", err)
 			}
 		}
 	}()
@@ -685,7 +685,7 @@ func writeSession(dtf *dnstapFilter, arrowSchema *arrow.Schema, record arrow.Rec
 		// Closing the parquetWriter automatically closes the underlying file
 		fileOpen = false
 		if err != nil {
-			dtf.log.Printf("writeSession: unable to do deferred close of parquetWriter: %w", err)
+			dtm.log.Printf("writeSession: unable to do deferred close of parquetWriter: %w", err)
 		}
 	}()
 
@@ -710,7 +710,7 @@ func writeSession(dtf *dnstapFilter, arrowSchema *arrow.Schema, record arrow.Rec
 	}
 	fmt.Println(string(jsonBytes))
 
-	dtf.log.Printf("renaming session file '%s' -> '%s'", absoluteTmpFileName, absoluteFileName)
+	dtm.log.Printf("renaming session file '%s' -> '%s'", absoluteTmpFileName, absoluteFileName)
 	err = os.Rename(absoluteTmpFileName, absoluteFileName)
 	if err != nil {
 		return fmt.Errorf("writeSession: unable to rename output file: %w", err)
@@ -735,8 +735,8 @@ func buildParquetFilenames(baseDir string, baseName string) (string, string) {
 	return absoluteTmpFileName, absoluteFileName
 }
 
-func writeHistogramParquet(dtf *dnstapFilter, prevWellKnownDomainsData *wellKnownDomainsData, labelLimit int, dataDir string) error {
-	dtf.log.Printf("in writeHistogramParquet")
+func writeHistogramParquet(dtm *dnstapMinimiser, prevWellKnownDomainsData *wellKnownDomainsData, labelLimit int, dataDir string) error {
+	dtm.log.Printf("in writeHistogramParquet")
 
 	// Write histogram file to an outbox dir where it will get picked up by
 	// the histogram sender
@@ -744,7 +744,7 @@ func writeHistogramParquet(dtf *dnstapFilter, prevWellKnownDomainsData *wellKnow
 
 	absoluteTmpFileName, absoluteFileName := buildParquetFilenames(outboxDir, "dns_histogram")
 
-	dtf.log.Printf("writing out histogram file %s", absoluteTmpFileName)
+	dtm.log.Printf("writing out histogram file %s", absoluteTmpFileName)
 
 	absoluteTmpFileName = filepath.Clean(absoluteTmpFileName)
 	outFile, err := os.Create(absoluteTmpFileName)
@@ -758,7 +758,7 @@ func writeHistogramParquet(dtf *dnstapFilter, prevWellKnownDomainsData *wellKnow
 		if fileOpen {
 			err := outFile.Close()
 			if err != nil {
-				dtf.log.Printf("writeHistogramParquet: unable to do deferred close of histogram outFile: %w", err)
+				dtm.log.Printf("writeHistogramParquet: unable to do deferred close of histogram outFile: %w", err)
 			}
 		}
 	}()
@@ -780,8 +780,8 @@ func writeHistogramParquet(dtf *dnstapFilter, prevWellKnownDomainsData *wellKnow
 		// Setting the labels now when we are out of the hot path.
 		setHistogramLabels(labels, labelLimit, hGramData)
 
-		dtf.log.Printf("ipv4 cardinality: %d", hGramData.v4ClientHLL.Cardinality())
-		dtf.log.Printf("ipv6 cardinality: %d", hGramData.v6ClientHLL.Cardinality())
+		dtm.log.Printf("ipv4 cardinality: %d", hGramData.v4ClientHLL.Cardinality())
+		dtm.log.Printf("ipv6 cardinality: %d", hGramData.v6ClientHLL.Cardinality())
 
 		// Write out the bytes from our hll data structures
 		hGramData.V4ClientCountHLLBytes = hGramData.v4ClientHLL.ToBytes()
@@ -807,7 +807,7 @@ func writeHistogramParquet(dtf *dnstapFilter, prevWellKnownDomainsData *wellKnow
 	}
 
 	// Atomically rename the file to its real name so it can be picked up by the histogram sender
-	dtf.log.Printf("renaming histogram file '%s' -> '%s'", absoluteTmpFileName, absoluteFileName)
+	dtm.log.Printf("renaming histogram file '%s' -> '%s'", absoluteTmpFileName, absoluteFileName)
 	err = os.Rename(absoluteTmpFileName, absoluteFileName)
 	if err != nil {
 		return fmt.Errorf("writeHistogramParquet: unable to rename output file: %w", err)
@@ -817,9 +817,9 @@ func writeHistogramParquet(dtf *dnstapFilter, prevWellKnownDomainsData *wellKnow
 }
 
 // Pseudonymize IP address fields in a dnstap message
-func (dtf *dnstapFilter) pseudonymizeDnstap(dt *dnstap.Dnstap) {
-	dt.Message.QueryAddress = dtf.cryptopan.Anonymize(net.IP(dt.Message.QueryAddress))
-	dt.Message.ResponseAddress = dtf.cryptopan.Anonymize(net.IP(dt.Message.ResponseAddress))
+func (dtm *dnstapMinimiser) pseudonymizeDnstap(dt *dnstap.Dnstap) {
+	dt.Message.QueryAddress = dtm.cryptopan.Anonymize(net.IP(dt.Message.QueryAddress))
+	dt.Message.ResponseAddress = dtm.cryptopan.Anonymize(net.IP(dt.Message.ResponseAddress))
 }
 
 // Send histogram data via signed HTTP message to aggregate-receiver (https://github.com/dnstapir/aggregate-receiver)
