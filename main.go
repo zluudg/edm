@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"crypto/ecdsa"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"flag"
 	"fmt"
 	"hash"
@@ -861,7 +863,7 @@ func (dtf *dnstapFilter) pseudonymizeDnstap(dt *dnstap.Dnstap) {
 }
 
 // Send histogram data via signed HTTP message to aggregate-receiver (https://github.com/dnstapir/aggregate-receiver)
-func sendHistogramParquet(aggrecURL url.URL, fileName string, privKey *ecdsa.PrivateKey) error {
+func sendHistogramParquet(aggrecURL url.URL, fileName string, privKey *ecdsa.PrivateKey, caCertPool *x509.CertPool, clientCert tls.Certificate) error {
 
 	baseDir := "/var/lib/dtm"
 	histogramFileName := filepath.Join(baseDir, fileName)
@@ -883,7 +885,8 @@ func sendHistogramParquet(aggrecURL url.URL, fileName string, privKey *ecdsa.Pri
 
 	fileSize := fileInfo.Size()
 
-	// Set some timouts to protect from hanging connections
+	// Set some timouts to protect from hanging connections as well as
+	// configuring mTLS.
 	httpClient := http.Client{
 		Transport: &http.Transport{
 			Dial: (&net.Dialer{
@@ -892,6 +895,11 @@ func sendHistogramParquet(aggrecURL url.URL, fileName string, privKey *ecdsa.Pri
 			}).Dial,
 			TLSHandshakeTimeout:   10 * time.Second,
 			ResponseHeaderTimeout: 10 * time.Second,
+			TLSClientConfig: &tls.Config{
+				RootCAs:      caCertPool,
+				Certificates: []tls.Certificate{clientCert},
+				MinVersion:   tls.VersionTLS13,
+			},
 		},
 	}
 
