@@ -140,21 +140,12 @@ func main() {
 	// Handle flags
 	debug := flag.Bool("debug", false, "print debug logging during operation")
 	configFile := flag.String("config", "dtm.toml", "config file for sensitive information")
-	fileformat := flag.String("file-format", "json", "output format when writing to a file ('json' or 'fstrm')")
 	inputUnixSocketPath := flag.String("input-unix", "/var/lib/unbound/dnstap.sock", "create unix socket for reading dnstap")
-	outputFilename := flag.String("output-file", "", "the file to write dnstap streams to ('-' means stdout)")
-	outputTCP := flag.String("output-tcp", "", "the target and port to write dnstap streams to, e.g. '127.0.0.1:5555'")
 	cryptoPanKey := flag.String("cryptopan-key", "", "override the secret used for Crypto-PAn pseudonymization")
 	cryptoPanKeySalt := flag.String("cryptopan-key-salt", "dtm-kdf-salt-val", "the salt used for key derivation")
 	dawgFile := flag.String("well-known-domains", "well-known-domains.dawg", "the dawg file used for filtering well-known domains")
 	dataDir := flag.String("data-dir", "/var/lib/dtm", "directory where output data is written")
 	flag.Parse()
-
-	// For now we only support a single output at a time
-	if *outputFilename != "" && *outputTCP != "" {
-		slog.Error("flags -output-file and -output-tcp are mutually exclusive, use only one")
-		os.Exit(1)
-	}
 
 	conf, err := readConfig(*configFile)
 	if err != nil {
@@ -181,53 +172,6 @@ func main() {
 	// well
 	slog.SetDefault(logger)
 
-	// Configure the selected output writer
-	var dnstapOutput dnstap.Output
-
-	if *outputFilename != "" {
-		switch *fileformat {
-		case "fstrm":
-			dnstapOutput, err = dnstap.NewFrameStreamOutputFromFilename(*outputFilename)
-			if err != nil {
-				slog.Error(err.Error())
-				os.Exit(1)
-			}
-		case "json":
-			dnstapOutput, err = dnstap.NewTextOutputFromFilename(*outputFilename, dnstap.JSONFormat, false)
-			if err != nil {
-				slog.Error(err.Error())
-				os.Exit(1)
-			}
-		default:
-			slog.Error("-file-format must be 'fstrm' or 'json'")
-			os.Exit(1)
-		}
-	} else if *outputTCP != "" {
-		var naddr net.Addr
-		naddr, err := net.ResolveTCPAddr("tcp", *outputTCP)
-		if err != nil {
-			slog.Error(err.Error())
-			os.Exit(1)
-		}
-		dnstapOutput, err = dnstap.NewFrameStreamSockOutput(naddr)
-		if err != nil {
-			slog.Error(err.Error())
-			os.Exit(1)
-		}
-	} else {
-		slog.Error("must set -output-file or -output-tcp")
-		os.Exit(1)
-	}
-
-	// Enable logging for the selected output worker, we depend on
-	// slog.SetDefault above to get structed logging.
-	switch v := dnstapOutput.(type) {
-	case *dnstap.FrameStreamOutput:
-		v.SetLogger(log.Default())
-	case *dnstap.TextOutput:
-		v.SetLogger(log.Default())
-	}
-
 	// Create a 32 byte length secret based on the supplied -crypto-pan key,
 	// this way the user can supply a -cryptopan-key of any length and
 	// we still end up with the 32 byte length expected by AES.
@@ -244,7 +188,7 @@ func main() {
 	arrowPool := memory.NewGoAllocator()
 
 	// Create an instance of the filter
-	dtf, err := newDnstapFilter(log.Default(), dnstapOutput, aesKey, *debug)
+	dtf, err := newDnstapFilter(log.Default(), aesKey, *debug)
 	if err != nil {
 		slog.Error(err.Error())
 		os.Exit(1)
@@ -287,9 +231,6 @@ func main() {
 	// Start filter
 	go dtf.runFilter(arrowPool, dnsSessionRowSchema, dnsSessionRowBuilder, *dawgFile, *dataDir)
 
-	// Start dnstap.Output
-	go dnstapOutput.RunOutputLoop()
-
 	// Start dnstap.Input
 	go dti.ReadInto(dtf.inputChannel)
 
@@ -303,7 +244,6 @@ type dtmConfig struct {
 
 type dnstapFilter struct {
 	inputChannel chan []byte          // the channel expected to be passed to dnstap ReadInto()
-	dnstapOutput dnstap.Output        // the dnstap.Output we send modified dnstap messages to
 	log          dnstap.Logger        // any information logging is sent here
 	cryptopan    *cryptopan.Cryptopan // used for pseudonymizing IP addresses
 	stop         chan struct{}        // close this channel to gracefully stop runFilter()
@@ -311,7 +251,7 @@ type dnstapFilter struct {
 	debug        bool                 // if we should print debug messages during operation
 }
 
-func newDnstapFilter(logger dnstap.Logger, dnstapOutput dnstap.Output, cryptoPanKey []byte, debug bool) (*dnstapFilter, error) {
+func newDnstapFilter(logger dnstap.Logger, cryptoPanKey []byte, debug bool) (*dnstapFilter, error) {
 	cpn, err := cryptopan.New(cryptoPanKey)
 	if err != nil {
 		return nil, fmt.Errorf("newDnstapFilter: %w", err)
@@ -320,8 +260,9 @@ func newDnstapFilter(logger dnstap.Logger, dnstapOutput dnstap.Output, cryptoPan
 	dtf.cryptopan = cpn
 	dtf.stop = make(chan struct{})
 	dtf.done = make(chan struct{})
-	dtf.inputChannel = make(chan []byte, cap(dnstapOutput.GetOutputChannel()))
-	dtf.dnstapOutput = dnstapOutput
+	// Size 32 matches unexported "const outputChannelSize = 32" in
+	// https://github.com/dnstap/golang-dnstap/blob/master/dnstap.go
+	dtf.inputChannel = make(chan []byte, 32)
 	dtf.log = logger
 	dtf.debug = debug
 
@@ -540,14 +481,6 @@ filterLoop:
 			// Since we have set fields in the arrow data at this
 			// point we have things to write out
 			arrow_updated = true
-
-			b, err := proto.Marshal(dt)
-			if err != nil {
-				dtf.log.Printf("dnstapFilter.runFilter: proto.Marshal() failed: %s, returning", err)
-				break filterLoop
-			}
-			dtf.dnstapOutput.GetOutputChannel() <- b
-
 		case <-ticker.C:
 			if arrow_updated {
 				record := dnsSessionRowBuilder.NewRecord()
@@ -572,8 +505,6 @@ filterLoop:
 			break filterLoop
 		}
 	}
-	// We close the dnstap.Output so it has a chance to flush out its messages
-	dtf.dnstapOutput.Close()
 	// Signal main() that we are done and ready to exit
 	close(dtf.done)
 }
