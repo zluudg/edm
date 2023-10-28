@@ -261,7 +261,7 @@ func main() {
 	err = hll.Defaults(hll.Settings{
 		Log2m:             10,
 		Regwidth:          4,
-		ExplicitThreshold: hll.AutoExplicitThreshold,
+		ExplicitThreshold: 0,
 		SparseEnabled:     true,
 	})
 	if err != nil {
