@@ -43,6 +43,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// Histogram struct implementing description at https://github.com/dnstapir/datasets/blob/main/HistogramReport.fbs
 type histogramData struct {
 	// label fields must be exported as we set them using reflection,
 	// otherwise: "panic: reflect: reflect.Value.SetString using value obtained using unexported field"
@@ -59,7 +60,14 @@ type histogramData struct {
 	Label8     *string `parquet:"name=label8, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
 	Label9     *string `parquet:"name=label9, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
 	ACount     int64   `parquet:"name=a_count, type=INT64, convertedtype=UINT_64"`
+	AAAACount  int64   `parquet:"name=aaaa_count, type=INT64, convertedtype=UINT_64"`
+	MXCount    int64   `parquet:"name=mx_count, type=INT64, convertedtype=UINT_64"`
+	NSCount    int64   `parquet:"name=ns_count, type=INT64, convertedtype=UINT_64"`
 	OtherCount int64   `parquet:"name=other_count, type=INT64, convertedtype=UINT_64"`
+	NonINCount int64   `parquet:"name=non_in_count, type=INT64, convertedtype=UINT_64"`
+	OKCount    int64   `parquet:"name=ok_count, type=INT64, convertedtype=UINT_64"`
+	NXCount    int64   `parquet:"name=nx_count, type=INT64, convertedtype=UINT_64"`
+	FailCount  int64   `parquet:"name=fail_count, type=INT64, convertedtype=UINT_64"`
 	// The hll.HLL structs are not expected to be included in the output
 	// parquet file, and thus do not need to be exported
 	v4ClientHLL           hll.Hll
@@ -302,12 +310,12 @@ func newWellKnownDomainsTracker(dawgFinder dawg.Finder) (*wellKnownDomainsTracke
 	}, nil
 }
 
-func (wkd *wellKnownDomainsTracker) isKnown(ipBytes []byte, q dns.Question) bool {
+func (wkd *wellKnownDomainsTracker) isKnown(ipBytes []byte, msg *dns.Msg) bool {
 
 	wkd.mutex.Lock()
 	defer wkd.mutex.Unlock()
 
-	index := wkd.dawgFinder.IndexOf(q.Name)
+	index := wkd.dawgFinder.IndexOf(msg.Question[0].Name)
 
 	// If this is is not a well-known domain just return as fast as
 	// possible
@@ -335,11 +343,32 @@ func (wkd *wellKnownDomainsTracker) isKnown(ipBytes []byte, q dns.Question) bool
 		wkd.murmur3Hasher.Reset()
 	}
 
-	switch q.Qtype {
-	case dns.TypeA:
-		wkd.m[index].ACount++
-	default:
-		wkd.m[index].OtherCount++
+	// Count stats in header
+	switch msg.Rcode {
+	case dns.RcodeSuccess:
+		wkd.m[index].OKCount++
+	case dns.RcodeNXRrset:
+		wkd.m[index].NXCount++
+	case dns.RcodeServerFailure:
+		wkd.m[index].FailCount++
+	}
+
+	// Count status based on question class and type
+	if msg.Question[0].Qclass == dns.ClassINET {
+		switch msg.Question[0].Qtype {
+		case dns.TypeA:
+			wkd.m[index].ACount++
+		case dns.TypeAAAA:
+			wkd.m[index].AAAACount++
+		case dns.TypeMX:
+			wkd.m[index].MXCount++
+		case dns.TypeNS:
+			wkd.m[index].NSCount++
+		default:
+			wkd.m[index].OtherCount++
+		}
+	} else {
+		wkd.m[index].NonINCount++
 	}
 
 	return true
@@ -469,7 +498,7 @@ filterLoop:
 
 			// We pass on the client address for cardinality
 			// measurements.
-			if wkdTracker.isKnown(dt.Message.QueryAddress, msg.Question[0]) {
+			if wkdTracker.isKnown(dt.Message.QueryAddress, msg) {
 				dtf.log.Printf("skipping well-known domain %s", msg.Question[0].Name)
 				continue
 			}

@@ -47,6 +47,6 @@ func BenchmarkWKDTIsKnown(b *testing.B) {
 
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
-		wkdTracker.isKnown(ip.AsSlice(), m.Question[0])
+		wkdTracker.isKnown(ip.AsSlice(), m)
 	}
 }
