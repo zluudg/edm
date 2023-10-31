@@ -29,7 +29,7 @@ Usage of dtm:
   -mqtt-client-cert-file string
     	ECSDSA client cert used for authenticating to MQTT bus (default "dtm-mqtt-client.pem")
   -mqtt-client-id string
-    	MQTT client id used for publishing eventso (default "dtm-pub")
+    	MQTT client id used for publishing events (default "dtm-pub")
   -mqtt-client-key-file string
     	ECSDSA client key used for authenticating to MQTT bus (default "dtm-mqtt-client-key.pem")
   -mqtt-keepalive int

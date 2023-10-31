@@ -162,7 +162,7 @@ func main() {
 	mqttClientCertFile := flag.String("mqtt-client-cert-file", "dtm-mqtt-client.pem", "ECSDSA client cert used for authenticating to MQTT bus")
 	mqttServer := flag.String("mqtt-server", "127.0.0.1:8883", "MQTT server we will publish events to")
 	mqttTopic := flag.String("mqtt-topic", "events/up/dtm/new_qname", "MQTT topic to publish events to")
-	mqttClientID := flag.String("mqtt-client-id", "dtm-pub", "MQTT client id used for publishing eventso")
+	mqttClientID := flag.String("mqtt-client-id", "dtm-pub", "MQTT client id used for publishing events")
 	mqttCAFile := flag.String("mqtt-ca", "mqtt-ca.crt", "CA cert used for validating MQTT TLS connection")
 	mqttKeepAlive := flag.Int("mqtt-keepalive", 30, "Keepalive interval fo MQTT connection")
 	mqttCleanStart := flag.Bool("mqtt-clean-start", true, "Control if a new MQTT session is created when connecting")
