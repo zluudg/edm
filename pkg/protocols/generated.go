@@ -29,7 +29,7 @@ type EventsMqttMessageNewQnameJson struct {
 	Timestamp time.Time `json:"timestamp"`
 
 	// Type corresponds to the JSON schema field "type".
-	Type interface{} `json:"type"`
+	Type string `json:"type"`
 
 	// Version corresponds to the JSON schema field "version".
 	Version int `json:"version"`
