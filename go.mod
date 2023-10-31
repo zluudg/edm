@@ -6,6 +6,8 @@ require (
 	github.com/BurntSushi/toml v1.3.2
 	github.com/apache/arrow/go/v13 v13.0.0
 	github.com/dnstap/golang-dnstap v0.4.0
+	github.com/eclipse/paho.golang v0.12.0
+	github.com/lestrrat-go/jwx/v2 v2.0.15
 	github.com/miekg/dns v1.1.56
 	github.com/segmentio/go-hll v1.0.1
 	github.com/smhanov/dawg v0.0.0-20220118194912-66057bdbf2e3
@@ -36,7 +38,6 @@ require (
 	github.com/lestrrat-go/httpcc v1.0.1 // indirect
 	github.com/lestrrat-go/httprc v1.0.4 // indirect
 	github.com/lestrrat-go/iter v1.0.2 // indirect
-	github.com/lestrrat-go/jwx/v2 v2.0.15 // indirect
 	github.com/lestrrat-go/option v1.0.1 // indirect
 	github.com/minio/asm2plan9s v0.0.0-20200509001527-cdd76441f9d8 // indirect
 	github.com/minio/c2goasm v0.0.0-20190812172519-36a3d3bbc4f3 // indirect

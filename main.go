@@ -6,6 +6,8 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
 	"flag"
 	"fmt"
 	"hash"
@@ -32,6 +34,8 @@ import (
 	"github.com/apache/arrow/go/v13/arrow/memory"
 	"github.com/apache/arrow/go/v13/parquet/pqarrow"
 	dnstap "github.com/dnstap/golang-dnstap"
+	"github.com/dnstapir/dtm/pkg/protocols"
+	"github.com/eclipse/paho.golang/paho"
 	"github.com/miekg/dns"
 	"github.com/segmentio/go-hll"
 	"github.com/smhanov/dawg"
@@ -153,6 +157,15 @@ func main() {
 	cryptoPanKeySalt := flag.String("cryptopan-key-salt", "dtm-kdf-salt-val", "the salt used for key derivation")
 	dawgFile := flag.String("well-known-domains", "well-known-domains.dawg", "the dawg file used for filtering well-known domains")
 	dataDir := flag.String("data-dir", "/var/lib/dtm", "directory where output data is written")
+	mqttSigningKeyFile := flag.String("mqtt-signing-key-file", "dtm-mqtt-signer-key.pem", "ECSDSA key used for signing MQTT messages")
+	mqttClientKeyFile := flag.String("mqtt-client-key-file", "dtm-mqtt-client-key.pem", "ECSDSA client key used for authenticating to MQTT bus")
+	mqttClientCertFile := flag.String("mqtt-client-cert-file", "dtm-mqtt-client.pem", "ECSDSA client cert used for authenticating to MQTT bus")
+	mqttServer := flag.String("mqtt-server", "127.0.0.1:8883", "MQTT server we will publish events to")
+	mqttTopic := flag.String("mqtt-topic", "events/up/dtm/new_qname", "MQTT topic to publish events to")
+	mqttClientID := flag.String("mqtt-client-id", "dtm-pub", "MQTT client id used for publishing eventso")
+	mqttCAFile := flag.String("mqtt-ca", "mqtt-ca.crt", "CA cert used for validating MQTT TLS connection")
+	mqttKeepAlive := flag.Int("mqtt-keepalive", 30, "Keepalive interval fo MQTT connection")
+	mqttCleanStart := flag.Bool("mqtt-clean-start", true, "Control if a new MQTT session is created when connecting")
 	flag.Parse()
 
 	conf, err := readConfig(*configFile)
@@ -170,6 +183,54 @@ func main() {
 	// overridden with a flag for testing purposes
 	if *cryptoPanKey != "" {
 		conf.CryptoPanKey = *cryptoPanKey
+	}
+
+	mqttSigningKeyBytes, err := os.ReadFile(*mqttSigningKeyFile)
+	if err != nil {
+		slog.Error(fmt.Sprintf("unable to read 'mqtt-signing-key-file': %s", err))
+		os.Exit(1)
+	}
+
+	pemBlock, _ := pem.Decode(mqttSigningKeyBytes)
+	if pemBlock == nil || pemBlock.Type != "EC PRIVATE KEY" {
+		slog.Error("failed to decode PEM block containing ECDSA private key")
+		os.Exit(1)
+	}
+	mqttSigningKey, err := x509.ParseECPrivateKey(pemBlock.Bytes)
+	if err != nil {
+		slog.Error(fmt.Sprintf("unable to parse key material from 'mqtt-signing-key-file': %s", err))
+		os.Exit(1)
+	}
+
+	// Setup CA cert for validating the MQTT connection
+	caCert, err := os.ReadFile(*mqttCAFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	caCertPool := x509.NewCertPool()
+	ok := caCertPool.AppendCertsFromPEM([]byte(caCert))
+	if !ok {
+		slog.Error(fmt.Sprintf("failed to append certs from pem: %s", err))
+		os.Exit(1)
+	}
+
+	// Setup client cert/key for mTLS authentication
+	clientCert, err := tls.LoadX509KeyPair(*mqttClientCertFile, *mqttClientKeyFile)
+	if err != nil {
+		slog.Error(fmt.Sprintf("unable to load x509 mqtt client cert: %s", err))
+		os.Exit(1)
+	}
+
+	mqttPub, err := newMQTTPublisher(caCertPool, *mqttServer, *mqttTopic, *mqttClientID, clientCert, mqttSigningKey)
+	if err != nil {
+		slog.Error(fmt.Sprintf("unable to create MQTT publisher: %s", err))
+		os.Exit(1)
+	}
+
+	err = mqttPub.connect(uint16(*mqttKeepAlive), *mqttClientID, *mqttCleanStart)
+	if err != nil {
+		slog.Error(fmt.Sprintf("unable to connect to MQTT server: %s", err))
+		os.Exit(1)
 	}
 
 	// Logger used for the different background workers, logged to stderr
@@ -237,13 +298,24 @@ func main() {
 	defer dnsSessionRowBuilder.Release()
 
 	// Start minimiser
-	go dtm.runMinimiser(arrowPool, dnsSessionRowSchema, dnsSessionRowBuilder, *dawgFile, *dataDir)
+	go dtm.runMinimiser(arrowPool, dnsSessionRowSchema, dnsSessionRowBuilder, *dawgFile, *dataDir, mqttPub)
 
 	// Start dnstap.Input
 	go dti.ReadInto(dtm.inputChannel)
 
 	// Wait here until runMinimiser() is done
 	<-dtm.done
+
+	// Gracefully disconnect from MQTT bus
+	if mqttPub.pahoClient != nil {
+		d := &paho.Disconnect{ReasonCode: 0}
+		err := mqttPub.pahoClient.Disconnect(d)
+		if err != nil {
+			slog.Error(fmt.Sprintf("unable to disconnect from MQTT server: %s", err))
+			os.Exit(1)
+		}
+	}
+
 }
 
 type dtmConfig struct {
@@ -397,7 +469,7 @@ func (wkd *wellKnownDomainsTracker) rotateTracker(dawgFile string) (*wellKnownDo
 // runMinimiser reads frames from the inputChannel, doing any modifications and
 // then passes them on to a dnstap.Output. To gracefully stop
 // runMinimiser() you need to close the dtm.stop channel.
-func (dtm *dnstapMinimiser) runMinimiser(arrowPool *memory.GoAllocator, arrowSchema *arrow.Schema, dnsSessionRowBuilder *array.RecordBuilder, dawgFile string, dataDir string) {
+func (dtm *dnstapMinimiser) runMinimiser(arrowPool *memory.GoAllocator, arrowSchema *arrow.Schema, dnsSessionRowBuilder *array.RecordBuilder, dawgFile string, dataDir string, mqttPub mqttPublisher) {
 	dt := &dnstap.Dnstap{}
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -500,6 +572,22 @@ minimiserLoop:
 			// measurements.
 			if wkdTracker.isKnown(dt.Message.QueryAddress, msg) {
 				dtm.log.Printf("skipping well-known domain %s", msg.Question[0].Name)
+				continue
+			}
+
+			// Create new_qname structure
+			newQname := protocols.NewQnameEvent(msg, timestamp)
+
+			newQnameJSON, err := json.Marshal(newQname)
+			if err != nil {
+				dtm.log.Printf("unable to create json for new_qname event: %w", err)
+				continue
+			}
+
+			// This is an unkown domain name, message the bus
+			err = mqttPub.publishMQTT(newQnameJSON)
+			if err != nil {
+				dtm.log.Printf("unable to publish new_qname event: %w", err)
 				continue
 			}
 
