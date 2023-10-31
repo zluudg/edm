@@ -22,6 +22,24 @@ Usage of dtm:
     	print debug logging during operation
   -input-unix string
     	create unix socket for reading dnstap (default "/var/lib/unbound/dnstap.sock")
+  -mqtt-ca string
+    	CA cert used for validating MQTT TLS connection (default "mqtt-ca.crt")
+  -mqtt-clean-start
+    	Control if a new MQTT session is created when connecting (default true)
+  -mqtt-client-cert-file string
+    	ECSDSA client cert used for authenticating to MQTT bus (default "dtm-mqtt-client.pem")
+  -mqtt-client-id string
+    	MQTT client id used for publishing eventso (default "dtm-pub")
+  -mqtt-client-key-file string
+    	ECSDSA client key used for authenticating to MQTT bus (default "dtm-mqtt-client-key.pem")
+  -mqtt-keepalive int
+    	Keepalive interval fo MQTT connection (default 30)
+  -mqtt-server string
+    	MQTT server we will publish events to (default "127.0.0.1:8883")
+  -mqtt-signing-key-file string
+    	ECSDSA key used for signing MQTT messages (default "dtm-mqtt-signer-key.pem")
+  -mqtt-topic string
+    	MQTT topic to publish events to (default "events/up/dtm/new_qname")
   -well-known-domains string
     	the dawg file used for filtering well-known domains (default "well-known-domains.dawg")
 ```
