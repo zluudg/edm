@@ -575,6 +575,7 @@ minimiserLoop:
 				continue
 			}
 
+			// TODO(patlu): send mqtt messages outside of the hot path
 			// Create new_qname structure
 			newQname := protocols.NewQnameEvent(msg, timestamp)
 
