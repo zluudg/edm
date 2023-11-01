@@ -526,9 +526,13 @@ func (dtm *dnstapMinimiser) runMinimiser(arrowPool *memory.GoAllocator, arrowSch
 	// minimiserLoop if writing is slow
 	histogramWriterCh := make(chan *wellKnownDomainsData, 100)
 
+	var wg sync.WaitGroup
+
 	// Start the record writers in the background
-	go sessionWriter(dtm, arrowSchema, sessionWriterCh, dataDir)
-	go histogramWriter(dtm, histogramWriterCh, labelLimit, dataDir)
+	wg.Add(1)
+	go sessionWriter(dtm, arrowSchema, sessionWriterCh, dataDir, &wg)
+	wg.Add(1)
+	go histogramWriter(dtm, histogramWriterCh, labelLimit, dataDir, &wg)
 
 	dawgFinder, err := dawg.Load(dawgFile)
 	if err != nil {
@@ -645,6 +649,11 @@ minimiserLoop:
 			}
 
 		case <-dtm.stop:
+			// Make sure writers have completed their work
+			close(sessionWriterCh)
+			close(histogramWriterCh)
+			wg.Wait()
+
 			break minimiserLoop
 		}
 	}
@@ -652,20 +661,21 @@ minimiserLoop:
 	close(dtm.done)
 }
 
-func sessionWriter(dtm *dnstapMinimiser, arrowSchema *arrow.Schema, ch chan arrow.Record, dataDir string) {
-	for {
-		record := <-ch
+func sessionWriter(dtm *dnstapMinimiser, arrowSchema *arrow.Schema, ch chan arrow.Record, dataDir string, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for record := range ch {
 		err := writeSession(dtm, arrowSchema, record, dataDir)
 		if err != nil {
 			dtm.log.Printf(err.Error())
 		}
-
 	}
+
+	dtm.log.Printf("sessionWriter: exiting loop")
 }
 
-func histogramWriter(dtm *dnstapMinimiser, ch chan *wellKnownDomainsData, labelLimit int, dataDir string) {
-	for {
-		prevWellKnownDomainsData := <-ch
+func histogramWriter(dtm *dnstapMinimiser, ch chan *wellKnownDomainsData, labelLimit int, dataDir string, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for prevWellKnownDomainsData := range ch {
 		dtm.log.Printf("in histogramWriter")
 		err := writeHistogramParquet(dtm, prevWellKnownDomainsData, labelLimit, dataDir)
 		if err != nil {
@@ -673,6 +683,7 @@ func histogramWriter(dtm *dnstapMinimiser, ch chan *wellKnownDomainsData, labelL
 		}
 
 	}
+	dtm.log.Printf("histogramWriter: exiting loop")
 }
 
 func parsePacket(dt *dnstap.Dnstap, isQuery bool) (*dns.Msg, time.Time) {
