@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/eclipse/paho.golang/paho"
 	"github.com/lestrrat-go/jwx/v2/jwa"
@@ -71,7 +72,9 @@ func (mp mqttPublisher) publishMQTT(jsonBytes []byte) error {
 		return fmt.Errorf("mqttPublisher.publishMQTT: failed to created JWS message: %w", err)
 	}
 
-	if _, err = mp.pahoClient.Publish(context.Background(), &paho.Publish{
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(time.Second*3))
+	defer cancel()
+	if _, err = mp.pahoClient.Publish(ctx, &paho.Publish{
 		Topic:   mp.topic,
 		Payload: signedMessage,
 	}); err != nil {

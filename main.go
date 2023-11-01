@@ -168,6 +168,7 @@ func main() {
 	mqttKeepAlive := flag.Int("mqtt-keepalive", 30, "Keepalive interval fo MQTT connection")
 	mqttCleanStart := flag.Bool("mqtt-clean-start", true, "Control if a new MQTT session is created when connecting")
 	qnameSeenEntries := flag.Int("qname-seen-entries", 10000000, "Number of 'seen' qnames stored in LRU cache, need to be changed based on RAM")
+	newQnameBuffer := flag.Int("newqname-buffer", 1000, "Number of slots in new_qname publisher channel, if this is filled up we skip new_qname events")
 	flag.Parse()
 
 	conf, err := readConfig(*configFile)
@@ -307,7 +308,7 @@ func main() {
 	defer dnsSessionRowBuilder.Release()
 
 	// Start minimiser
-	go dtm.runMinimiser(arrowPool, dnsSessionRowSchema, dnsSessionRowBuilder, *dawgFile, *dataDir, mqttPub, seenQnameLRU)
+	go dtm.runMinimiser(arrowPool, dnsSessionRowSchema, dnsSessionRowBuilder, *dawgFile, *dataDir, mqttPub, seenQnameLRU, *newQnameBuffer)
 
 	// Start dnstap.Input
 	go dti.ReadInto(dtm.inputChannel)
@@ -478,7 +479,7 @@ func (wkd *wellKnownDomainsTracker) rotateTracker(dawgFile string) (*wellKnownDo
 // runMinimiser reads frames from the inputChannel, doing any modifications and
 // then passes them on to a dnstap.Output. To gracefully stop
 // runMinimiser() you need to close the dtm.stop channel.
-func (dtm *dnstapMinimiser) runMinimiser(arrowPool *memory.GoAllocator, arrowSchema *arrow.Schema, dnsSessionRowBuilder *array.RecordBuilder, dawgFile string, dataDir string, mqttPub mqttPublisher, seenQnameLRU *lru.Cache[string, struct{}]) {
+func (dtm *dnstapMinimiser) runMinimiser(arrowPool *memory.GoAllocator, arrowSchema *arrow.Schema, dnsSessionRowBuilder *array.RecordBuilder, dawgFile string, dataDir string, mqttPub mqttPublisher, seenQnameLRU *lru.Cache[string, struct{}], newQnameBuffer int) {
 	dt := &dnstap.Dnstap{}
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -526,6 +527,10 @@ func (dtm *dnstapMinimiser) runMinimiser(arrowPool *memory.GoAllocator, arrowSch
 	// minimiserLoop if writing is slow
 	histogramWriterCh := make(chan *wellKnownDomainsData, 100)
 
+	// Channel used to feed the mqtt publisher with new_qname events,
+	// buffered so we do not block minimiserLoop if publishing events is slow
+	newQnamePublisherCh := make(chan *protocols.EventsMqttMessageNewQnameJson, newQnameBuffer)
+
 	var wg sync.WaitGroup
 
 	// Start the record writers in the background
@@ -533,6 +538,8 @@ func (dtm *dnstapMinimiser) runMinimiser(arrowPool *memory.GoAllocator, arrowSch
 	go sessionWriter(dtm, arrowSchema, sessionWriterCh, dataDir, &wg)
 	wg.Add(1)
 	go histogramWriter(dtm, histogramWriterCh, labelLimit, dataDir, &wg)
+	wg.Add(1)
+	go newQnamePublisher(dtm, newQnamePublisherCh, mqttPub, &wg)
 
 	dawgFinder, err := dawg.Load(dawgFile)
 	if err != nil {
@@ -600,25 +607,15 @@ minimiserLoop:
 			// eviction list which should be OK.
 			if _, qnameSeen := seenQnameLRU.Get(msg.Question[0].Name); !qnameSeen {
 				seenQnameLRU.Add(msg.Question[0].Name, struct{}{})
-				dtm.log.Printf("sending new_qname")
-				// TODO(patlu): send mqtt messages outside of the hot path
-				// Create new_qname structure
 				newQname := protocols.NewQnameEvent(msg, timestamp)
 
-				newQnameJSON, err := json.Marshal(newQname)
-				if err != nil {
-					dtm.log.Printf("unable to create json for new_qname event: %w", err)
-					continue
+				// IF the queue is full we skip sending new_qname events on the bus
+				select {
+				case newQnamePublisherCh <- &newQname:
+				default:
+					dtm.log.Printf("new_qname publisher channel is full, skipping event")
 				}
 
-				// This is an unkown domain name, message the bus
-				err = mqttPub.publishMQTT(newQnameJSON)
-				if err != nil {
-					dtm.log.Printf("unable to publish new_qname event: %w", err)
-					continue
-				}
-			} else {
-				dtm.log.Printf("already seen domain name, not sending new_qname")
 			}
 
 			setLabels(dtm, msg, labelLimit, labelSlice)
@@ -652,6 +649,7 @@ minimiserLoop:
 			// Make sure writers have completed their work
 			close(sessionWriterCh)
 			close(histogramWriterCh)
+			close(newQnamePublisherCh)
 			wg.Wait()
 
 			break minimiserLoop
@@ -684,6 +682,24 @@ func histogramWriter(dtm *dnstapMinimiser, ch chan *wellKnownDomainsData, labelL
 
 	}
 	dtm.log.Printf("histogramWriter: exiting loop")
+}
+
+func newQnamePublisher(dtm *dnstapMinimiser, ch chan *protocols.EventsMqttMessageNewQnameJson, mqttPub mqttPublisher, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for newQname := range ch {
+		newQnameJSON, err := json.Marshal(newQname)
+		if err != nil {
+			dtm.log.Printf("unable to create json for new_qname event: %w", err)
+			continue
+		}
+
+		err = mqttPub.publishMQTT(newQnameJSON)
+		if err != nil {
+			dtm.log.Printf("unable to publish new_qname event: %w", err)
+			continue
+		}
+	}
+	dtm.log.Printf("newQnamePublisher: exiting loop")
 }
 
 func parsePacket(dt *dnstap.Dnstap, isQuery bool) (*dns.Msg, time.Time) {
