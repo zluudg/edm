@@ -36,6 +36,7 @@ import (
 	dnstap "github.com/dnstap/golang-dnstap"
 	"github.com/dnstapir/dtm/pkg/protocols"
 	"github.com/eclipse/paho.golang/paho"
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/miekg/dns"
 	"github.com/segmentio/go-hll"
 	"github.com/smhanov/dawg"
@@ -166,6 +167,7 @@ func main() {
 	mqttCAFile := flag.String("mqtt-ca", "mqtt-ca.crt", "CA cert used for validating MQTT TLS connection")
 	mqttKeepAlive := flag.Int("mqtt-keepalive", 30, "Keepalive interval fo MQTT connection")
 	mqttCleanStart := flag.Bool("mqtt-clean-start", true, "Control if a new MQTT session is created when connecting")
+	qnameSeenEntries := flag.Int("qname-seen-entries", 10000000, "Number of 'seen' qnames stored in LRU cache, need to be changed based on RAM")
 	flag.Parse()
 
 	conf, err := readConfig(*configFile)
@@ -284,6 +286,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	// We need to keep track of domains that are not on the well-known
+	// domain list yet we have seen since we started. To limit the
+	// possibility of unbounded memory usage we use a LRU cache instead of
+	// something simpler like a map. This does mean that we can potentially
+	// re-send a new_qname event if the LRU is full.
+	seenQnameLRU, _ := lru.New[string, struct{}](*qnameSeenEntries)
+
 	// Exit gracefully on SIGINT or SIGTERM
 	go func() {
 		sigs := make(chan os.Signal, 1)
@@ -298,7 +307,7 @@ func main() {
 	defer dnsSessionRowBuilder.Release()
 
 	// Start minimiser
-	go dtm.runMinimiser(arrowPool, dnsSessionRowSchema, dnsSessionRowBuilder, *dawgFile, *dataDir, mqttPub)
+	go dtm.runMinimiser(arrowPool, dnsSessionRowSchema, dnsSessionRowBuilder, *dawgFile, *dataDir, mqttPub, seenQnameLRU)
 
 	// Start dnstap.Input
 	go dti.ReadInto(dtm.inputChannel)
@@ -469,7 +478,7 @@ func (wkd *wellKnownDomainsTracker) rotateTracker(dawgFile string) (*wellKnownDo
 // runMinimiser reads frames from the inputChannel, doing any modifications and
 // then passes them on to a dnstap.Output. To gracefully stop
 // runMinimiser() you need to close the dtm.stop channel.
-func (dtm *dnstapMinimiser) runMinimiser(arrowPool *memory.GoAllocator, arrowSchema *arrow.Schema, dnsSessionRowBuilder *array.RecordBuilder, dawgFile string, dataDir string, mqttPub mqttPublisher) {
+func (dtm *dnstapMinimiser) runMinimiser(arrowPool *memory.GoAllocator, arrowSchema *arrow.Schema, dnsSessionRowBuilder *array.RecordBuilder, dawgFile string, dataDir string, mqttPub mqttPublisher, seenQnameLRU *lru.Cache[string, struct{}]) {
 	dt := &dnstap.Dnstap{}
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -575,21 +584,37 @@ minimiserLoop:
 				continue
 			}
 
-			// TODO(patlu): send mqtt messages outside of the hot path
-			// Create new_qname structure
-			newQname := protocols.NewQnameEvent(msg, timestamp)
+			// Check if we have already seen this qname since we started.
+			//
+			// NOTE: This looks like it might be a race (calling
+			// Get() followed by separate Add()) but since we want
+			// to keep often looked-up names in the cache we need to
+			// use Get() for updating recent-ness, and there is no
+			// GetOrAdd() method available. However, it should be
+			// safe for multiple threads to call Add() as this will
+			// only move an already added entry to the front of the
+			// eviction list which should be OK.
+			if _, qnameSeen := seenQnameLRU.Get(msg.Question[0].Name); !qnameSeen {
+				seenQnameLRU.Add(msg.Question[0].Name, struct{}{})
+				dtm.log.Printf("sending new_qname")
+				// TODO(patlu): send mqtt messages outside of the hot path
+				// Create new_qname structure
+				newQname := protocols.NewQnameEvent(msg, timestamp)
 
-			newQnameJSON, err := json.Marshal(newQname)
-			if err != nil {
-				dtm.log.Printf("unable to create json for new_qname event: %w", err)
-				continue
-			}
+				newQnameJSON, err := json.Marshal(newQname)
+				if err != nil {
+					dtm.log.Printf("unable to create json for new_qname event: %w", err)
+					continue
+				}
 
-			// This is an unkown domain name, message the bus
-			err = mqttPub.publishMQTT(newQnameJSON)
-			if err != nil {
-				dtm.log.Printf("unable to publish new_qname event: %w", err)
-				continue
+				// This is an unkown domain name, message the bus
+				err = mqttPub.publishMQTT(newQnameJSON)
+				if err != nil {
+					dtm.log.Printf("unable to publish new_qname event: %w", err)
+					continue
+				}
+			} else {
+				dtm.log.Printf("already seen domain name, not sending new_qname")
 			}
 
 			setLabels(dtm, msg, labelLimit, labelSlice)

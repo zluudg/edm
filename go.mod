@@ -7,6 +7,7 @@ require (
 	github.com/apache/arrow/go/v13 v13.0.0
 	github.com/dnstap/golang-dnstap v0.4.0
 	github.com/eclipse/paho.golang v0.12.0
+	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/lestrrat-go/jwx/v2 v2.0.15
 	github.com/miekg/dns v1.1.56
 	github.com/segmentio/go-hll v1.0.1
