@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/tls"
@@ -15,7 +14,6 @@ import (
 	"log/slog"
 	"math/big"
 	"net"
-	"net/http"
 	"net/netip"
 	"net/url"
 	"os"
@@ -42,7 +40,6 @@ import (
 	"github.com/smhanov/dawg"
 	"github.com/spaolacci/murmur3"
 	"github.com/xitongsys/parquet-go/writer"
-	"github.com/yaronf/httpsign"
 	"github.com/yawning/cryptopan"
 	"golang.org/x/crypto/argon2"
 	"google.golang.org/protobuf/proto"
@@ -164,11 +161,17 @@ func main() {
 	mqttServer := flag.String("mqtt-server", "127.0.0.1:8883", "MQTT server we will publish events to")
 	mqttTopic := flag.String("mqtt-topic", "events/up/dtm/new_qname", "MQTT topic to publish events to")
 	mqttClientID := flag.String("mqtt-client-id", "dtm-pub", "MQTT client id used for publishing events")
-	mqttCAFile := flag.String("mqtt-ca", "mqtt-ca.crt", "CA cert used for validating MQTT TLS connection")
+	mqttCAFile := flag.String("mqtt-ca-file", "", "CA cert used for validating MQTT TLS connection, defaults to using OS CA certs")
 	mqttKeepAlive := flag.Int("mqtt-keepalive", 30, "Keepalive interval fo MQTT connection")
 	mqttCleanStart := flag.Bool("mqtt-clean-start", true, "Control if a new MQTT session is created when connecting")
 	qnameSeenEntries := flag.Int("qname-seen-entries", 10000000, "Number of 'seen' qnames stored in LRU cache, need to be changed based on RAM")
 	newQnameBuffer := flag.Int("newqname-buffer", 1000, "Number of slots in new_qname publisher channel, if this is filled up we skip new_qname events")
+	httpCAFile := flag.String("http-ca-file", "", "CA cert used for validating aggregate-receiver connection, defaults to using OS CA certs")
+	httpSigningKeyFile := flag.String("http-signing-key-file", "dtm-http-signer-key.pem", "ECSDSA key used for signing HTTP messages to aggregate-receiver")
+	httpSigningKeyID := flag.String("http-signing-key-id", "key1", "ID for the HTTP signing key")
+	httpClientKeyFile := flag.String("http-client-key-file", "dtm-http-client-key.pem", "ECSDSA client key used for authenticating to aggregate-receiver")
+	httpClientCertFile := flag.String("http-client-cert-file", "dtm-http-client.pem", "ECSDSA client cert used for authenticating to aggregate-receiver")
+	httpURLString := flag.String("http-url", "https://127.0.0.1:8443", "Service we will POST aggregates to")
 	flag.Parse()
 
 	conf, err := readConfig(*configFile)
@@ -188,43 +191,60 @@ func main() {
 		conf.CryptoPanKey = *cryptoPanKey
 	}
 
-	mqttSigningKeyBytes, err := os.ReadFile(*mqttSigningKeyFile)
+	httpURL, err := url.Parse(*httpURLString)
 	if err != nil {
-		slog.Error(fmt.Sprintf("unable to read 'mqtt-signing-key-file': %s", err))
+		slog.Error(fmt.Sprintf("unable to parse 'aggrec-url' setting: %s", err))
 		os.Exit(1)
 	}
 
-	pemBlock, _ := pem.Decode(mqttSigningKeyBytes)
-	if pemBlock == nil || pemBlock.Type != "EC PRIVATE KEY" {
-		slog.Error("failed to decode PEM block containing ECDSA private key")
-		os.Exit(1)
-	}
-	mqttSigningKey, err := x509.ParseECPrivateKey(pemBlock.Bytes)
+	mqttSigningKey, err := ecdsaPrivateKeyFromFile(*mqttSigningKeyFile)
 	if err != nil {
 		slog.Error(fmt.Sprintf("unable to parse key material from 'mqtt-signing-key-file': %s", err))
 		os.Exit(1)
 	}
 
-	// Setup CA cert for validating the MQTT connection
-	caCert, err := os.ReadFile(*mqttCAFile)
+	httpSigningKey, err := ecdsaPrivateKeyFromFile(*httpSigningKeyFile)
 	if err != nil {
-		log.Fatal(err)
-	}
-	caCertPool := x509.NewCertPool()
-	ok := caCertPool.AppendCertsFromPEM([]byte(caCert))
-	if !ok {
-		slog.Error(fmt.Sprintf("failed to append certs from pem: %s", err))
+		slog.Error(fmt.Sprintf("unable to parse key material from 'http-signing-key-file': %s", err))
 		os.Exit(1)
 	}
 
+	// Leaving these nil will use the OS default CA certs
+	var mqttCACertPool *x509.CertPool
+	var httpCACertPool *x509.CertPool
+
+	if *mqttCAFile != "" {
+		// Setup CA cert for validating the MQTT connection
+		mqttCACertPool, err = certPoolFromFile(*mqttCAFile)
+		if err != nil {
+			slog.Error(fmt.Sprintf("failed to create CA cert pool for '-mqtt-ca-file': %s", err))
+			os.Exit(1)
+		}
+	}
+
 	// Setup client cert/key for mTLS authentication
-	clientCert, err := tls.LoadX509KeyPair(*mqttClientCertFile, *mqttClientKeyFile)
+	mqttClientCert, err := tls.LoadX509KeyPair(*mqttClientCertFile, *mqttClientKeyFile)
 	if err != nil {
 		slog.Error(fmt.Sprintf("unable to load x509 mqtt client cert: %s", err))
 		os.Exit(1)
 	}
 
-	mqttPub, err := newMQTTPublisher(caCertPool, *mqttServer, *mqttTopic, *mqttClientID, clientCert, mqttSigningKey)
+	if *httpCAFile != "" {
+		// Setup CA cert for validating the aggregate-receiver connection
+		httpCACertPool, err = certPoolFromFile(*mqttCAFile)
+		if err != nil {
+			slog.Error(fmt.Sprintf("failed to create CA cert pool for '-http-ca-file': %s", err))
+			os.Exit(1)
+		}
+	}
+
+	httpClientCert, err := tls.LoadX509KeyPair(*httpClientCertFile, *httpClientKeyFile)
+	if err != nil {
+		slog.Error(fmt.Sprintf("unable to load x509 HTTP client cert: %s", err))
+		os.Exit(1)
+	}
+
+	mqttPub, err := newMQTTPublisher(mqttCACertPool, *mqttServer, *mqttTopic, *mqttClientID, mqttClientCert, mqttSigningKey)
 	if err != nil {
 		slog.Error(fmt.Sprintf("unable to create MQTT publisher: %s", err))
 		os.Exit(1)
@@ -294,6 +314,8 @@ func main() {
 	// re-send a new_qname event if the LRU is full.
 	seenQnameLRU, _ := lru.New[string, struct{}](*qnameSeenEntries)
 
+	aggregSender := newAggregateSender(dtm, httpURL, *httpSigningKeyID, httpSigningKey, httpCACertPool, httpClientCert)
+
 	// Exit gracefully on SIGINT or SIGTERM
 	go func() {
 		sigs := make(chan os.Signal, 1)
@@ -308,7 +330,7 @@ func main() {
 	defer dnsSessionRowBuilder.Release()
 
 	// Start minimiser
-	go dtm.runMinimiser(arrowPool, dnsSessionRowSchema, dnsSessionRowBuilder, *dawgFile, *dataDir, mqttPub, seenQnameLRU, *newQnameBuffer)
+	go dtm.runMinimiser(arrowPool, dnsSessionRowSchema, dnsSessionRowBuilder, *dawgFile, *dataDir, mqttPub, seenQnameLRU, *newQnameBuffer, aggregSender)
 
 	// Start dnstap.Input
 	go dti.ReadInto(dtm.inputChannel)
@@ -479,7 +501,7 @@ func (wkd *wellKnownDomainsTracker) rotateTracker(dawgFile string) (*wellKnownDo
 // runMinimiser reads frames from the inputChannel, doing any modifications and
 // then passes them on to a dnstap.Output. To gracefully stop
 // runMinimiser() you need to close the dtm.stop channel.
-func (dtm *dnstapMinimiser) runMinimiser(arrowPool *memory.GoAllocator, arrowSchema *arrow.Schema, dnsSessionRowBuilder *array.RecordBuilder, dawgFile string, dataDir string, mqttPub mqttPublisher, seenQnameLRU *lru.Cache[string, struct{}], newQnameBuffer int) {
+func (dtm *dnstapMinimiser) runMinimiser(arrowPool *memory.GoAllocator, arrowSchema *arrow.Schema, dnsSessionRowBuilder *array.RecordBuilder, dawgFile string, dataDir string, mqttPub mqttPublisher, seenQnameLRU *lru.Cache[string, struct{}], newQnameBuffer int, aggSender aggregateSender) {
 	dt := &dnstap.Dnstap{}
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -519,25 +541,43 @@ func (dtm *dnstapMinimiser) runMinimiser(arrowPool *memory.GoAllocator, arrowSch
 	// Keep track of if we have recorded any dnstap packets in arrow data
 	var arrow_updated bool
 
-	// Channel used to feed the session writer, buffered so we do not block
-	// minimiserLoop if writing is slow
+	// Setup channels for feeding writers and data senders that should do
+	// their work outside the main minimiser loop. They are buffered to
+	// to not block the loop if writing/sending data is slow.
+	// NOTE: Remember to close all of these channels at the end of the
+	// minimiser loop, otherwise the program can hang on shutdown.
 	sessionWriterCh := make(chan arrow.Record, 100)
-
-	// Channel used to feed the histogram writer, buffered so we do not block
-	// minimiserLoop if writing is slow
 	histogramWriterCh := make(chan *wellKnownDomainsData, 100)
-
-	// Channel used to feed the mqtt publisher with new_qname events,
-	// buffered so we do not block minimiserLoop if publishing events is slow
+	// This channel is only used for stopping the goroutine, so no buffer needed
+	histogramSenderCloserCh := make(chan struct{})
 	newQnamePublisherCh := make(chan *protocols.EventsMqttMessageNewQnameJson, newQnameBuffer)
 
 	var wg sync.WaitGroup
 
-	// Start the record writers in the background
+	// Write histogram file to an outbox dir where it will get picked up by
+	// the histogram sender. Upon being sent it will be moved to the sent dir.
+	outboxDir := filepath.Join(dataDir, "parquet", "histograms", "outbox")
+	sentDir := filepath.Join(dataDir, "parquet", "histograms", "sent")
+
+	// Make sure the directories exist
+	err := os.MkdirAll(outboxDir, 0750)
+	if err != nil {
+		slog.Error(fmt.Sprintf("runMinimiser: unable to create outbox dir: %s", err))
+		os.Exit(1)
+	}
+	err = os.MkdirAll(sentDir, 0750)
+	if err != nil {
+		slog.Error(fmt.Sprintf("runMinimiser: unable to create sent dir: %s", err))
+		os.Exit(1)
+	}
+
+	// Start record writers and data senders in the background
 	wg.Add(1)
 	go sessionWriter(dtm, arrowSchema, sessionWriterCh, dataDir, &wg)
 	wg.Add(1)
-	go histogramWriter(dtm, histogramWriterCh, labelLimit, dataDir, &wg)
+	go histogramWriter(dtm, histogramWriterCh, labelLimit, outboxDir, &wg)
+	wg.Add(1)
+	go histogramSender(dtm, histogramSenderCloserCh, outboxDir, sentDir, aggSender, &wg)
 	wg.Add(1)
 	go newQnamePublisher(dtm, newQnamePublisherCh, mqttPub, &wg)
 
@@ -609,7 +649,7 @@ minimiserLoop:
 				seenQnameLRU.Add(msg.Question[0].Name, struct{}{})
 				newQname := protocols.NewQnameEvent(msg, timestamp)
 
-				// IF the queue is full we skip sending new_qname events on the bus
+				// If the queue is full we skip sending new_qname events on the bus
 				select {
 				case newQnamePublisherCh <- &newQname:
 				default:
@@ -649,6 +689,7 @@ minimiserLoop:
 			// Make sure writers have completed their work
 			close(sessionWriterCh)
 			close(histogramWriterCh)
+			close(histogramSenderCloserCh)
 			close(newQnamePublisherCh)
 			wg.Wait()
 
@@ -671,17 +712,59 @@ func sessionWriter(dtm *dnstapMinimiser, arrowSchema *arrow.Schema, ch chan arro
 	dtm.log.Printf("sessionWriter: exiting loop")
 }
 
-func histogramWriter(dtm *dnstapMinimiser, ch chan *wellKnownDomainsData, labelLimit int, dataDir string, wg *sync.WaitGroup) {
+func histogramWriter(dtm *dnstapMinimiser, ch chan *wellKnownDomainsData, labelLimit int, outboxDir string, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for prevWellKnownDomainsData := range ch {
 		dtm.log.Printf("in histogramWriter")
-		err := writeHistogramParquet(dtm, prevWellKnownDomainsData, labelLimit, dataDir)
+		err := writeHistogramParquet(dtm, prevWellKnownDomainsData, labelLimit, outboxDir)
 		if err != nil {
 			dtm.log.Printf(err.Error())
 		}
 
 	}
 	dtm.log.Printf("histogramWriter: exiting loop")
+}
+
+func histogramSender(dtm *dnstapMinimiser, closerCh chan struct{}, outboxDir string, sentDir string, aggSender aggregateSender, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	// We will scan the outbox directory each tick for histogram parquet
+	// files to send
+	ticker := time.NewTicker(time.Second * 10)
+	defer ticker.Stop()
+
+timerLoop:
+	for {
+		select {
+		case <-ticker.C:
+			dirEntries, err := os.ReadDir(outboxDir)
+			if err != nil {
+				dtm.log.Printf("histogramSender: unable to read outbox dir: %w", err)
+				continue
+			}
+			for _, dirEntry := range dirEntries {
+				if dirEntry.IsDir() {
+					continue
+				}
+				if strings.HasPrefix(dirEntry.Name(), "dns_histogram-") && strings.HasSuffix(dirEntry.Name(), ".parquet") {
+					absPath := filepath.Join(outboxDir, dirEntry.Name())
+					absPathSent := filepath.Join(sentDir, dirEntry.Name())
+					err := aggSender.send(absPath)
+					if err != nil {
+						dtm.log.Printf("histogramSender: unable to send histogram file: %s", err)
+					}
+					err = os.Rename(absPath, absPathSent)
+					if err != nil {
+						dtm.log.Printf("histogramSender: unable to rename sent histogram file: %s", err)
+					}
+				}
+			}
+		case <-closerCh:
+			// If this channel is closed it is time to exit
+			break timerLoop
+		}
+	}
+	dtm.log.Printf("histogramSender: exiting loop")
 }
 
 func newQnamePublisher(dtm *dnstapMinimiser, ch chan *protocols.EventsMqttMessageNewQnameJson, mqttPub mqttPublisher, wg *sync.WaitGroup) {
@@ -876,12 +959,8 @@ func buildParquetFilenames(baseDir string, baseName string) (string, string) {
 	return absoluteTmpFileName, absoluteFileName
 }
 
-func writeHistogramParquet(dtm *dnstapMinimiser, prevWellKnownDomainsData *wellKnownDomainsData, labelLimit int, dataDir string) error {
+func writeHistogramParquet(dtm *dnstapMinimiser, prevWellKnownDomainsData *wellKnownDomainsData, labelLimit int, outboxDir string) error {
 	dtm.log.Printf("in writeHistogramParquet")
-
-	// Write histogram file to an outbox dir where it will get picked up by
-	// the histogram sender
-	outboxDir := filepath.Join(dataDir, "parquet", "histograms", "outbox")
 
 	absoluteTmpFileName, absoluteFileName := buildParquetFilenames(outboxDir, "dns_histogram")
 
@@ -957,98 +1036,42 @@ func writeHistogramParquet(dtm *dnstapMinimiser, prevWellKnownDomainsData *wellK
 	return nil
 }
 
+func ecdsaPrivateKeyFromFile(fileName string) (*ecdsa.PrivateKey, error) {
+	fileName = filepath.Clean(fileName)
+	keyBytes, err := os.ReadFile(fileName)
+	if err != nil {
+		return nil, fmt.Errorf("ecdsaPrivateKeyFromFile: unable to read ECDSA private key file: %w", err)
+	}
+
+	pemBlock, _ := pem.Decode(keyBytes)
+	if pemBlock == nil || pemBlock.Type != "EC PRIVATE KEY" {
+		return nil, fmt.Errorf("ecdsaPrivateKeyFromFile: failed to decode PEM block containing ECDSA private key")
+	}
+	privateKey, err := x509.ParseECPrivateKey(pemBlock.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("unable to parse key material from: %w", err)
+	}
+
+	return privateKey, nil
+}
+
+func certPoolFromFile(fileName string) (*x509.CertPool, error) {
+	fileName = filepath.Clean(fileName)
+	cert, err := os.ReadFile(fileName)
+	if err != nil {
+		return nil, fmt.Errorf("certPoolFromFile: unable to read file: %w", err)
+	}
+	certPool := x509.NewCertPool()
+	ok := certPool.AppendCertsFromPEM([]byte(cert))
+	if !ok {
+		return nil, fmt.Errorf("certPoolFromFile: failed to append certs from pem: %w", err)
+	}
+
+	return certPool, nil
+}
+
 // Pseudonymize IP address fields in a dnstap message
 func (dtm *dnstapMinimiser) pseudonymizeDnstap(dt *dnstap.Dnstap) {
 	dt.Message.QueryAddress = dtm.cryptopan.Anonymize(net.IP(dt.Message.QueryAddress))
 	dt.Message.ResponseAddress = dtm.cryptopan.Anonymize(net.IP(dt.Message.ResponseAddress))
-}
-
-// Send histogram data via signed HTTP message to aggregate-receiver (https://github.com/dnstapir/aggregate-receiver)
-func sendHistogramParquet(aggrecURL url.URL, baseDir string, fileName string, privKey *ecdsa.PrivateKey, caCertPool *x509.CertPool, clientCert tls.Certificate) error {
-
-	histogramFileName := filepath.Join(baseDir, fileName)
-
-	histogramFileName = filepath.Clean(histogramFileName)
-
-	if !strings.HasPrefix(histogramFileName, baseDir+"/") {
-		return fmt.Errorf("sendHistogramParquet: bad prefix for histogram directory: '%s', must start with: '%s'", histogramFileName, baseDir)
-	}
-	file, err := os.Open(histogramFileName)
-	if err != nil {
-		return fmt.Errorf("sendAggregateFile: unable to open file: %w", err)
-	}
-
-	fileInfo, err := file.Stat()
-	if err != nil {
-		return fmt.Errorf("sendAggregateFile: unable to stat file: %w", err)
-	}
-
-	fileSize := fileInfo.Size()
-
-	// Set some timouts to protect from hanging connections as well as
-	// configuring mTLS.
-	httpClient := http.Client{
-		Transport: &http.Transport{
-			Dial: (&net.Dialer{
-				Timeout:   30 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}).Dial,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ResponseHeaderTimeout: 10 * time.Second,
-			TLSClientConfig: &tls.Config{
-				RootCAs:      caCertPool,
-				Certificates: []tls.Certificate{clientCert},
-				MinVersion:   tls.VersionTLS13,
-			},
-		},
-	}
-
-	// Create signer and wrapped HTTP client
-	signer, _ := httpsign.NewP256Signer("key1", *privKey,
-		httpsign.NewSignConfig(),
-		httpsign.Headers("content-type", "content-length", "content-digest")) // The Content-Digest header will be auto-generated
-	client := httpsign.NewClient(httpClient, httpsign.NewClientConfig().SetSignatureName("sig1").SetSigner(signer)) // sign requests, don't verify responses
-
-	// Send signed HTTP POST message
-	req, err := http.NewRequest("POST", aggrecURL.String(), bufio.NewReader(file))
-	if err != nil {
-		return fmt.Errorf("sendAggregateFile: unable to create request: %w", err)
-	}
-
-	// From https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-digest-headers-13#section-6.3:
-	// ===
-	// Digests explicitly depend on the "representation metadata" (e.g.,
-	// the values of Content-Type, Content-Encoding etc.). A signature that
-	// protects Integrity fields but not other "representation metadata"
-	// can expose the communication to tampering.
-	// ===
-	req.Header.Add("Content-Type", "application/vnd.apache.parquet")
-
-	// This is set automatically by the transport, but we need to add it
-	// here as well to make the signer see it, otherwise it errors out:
-	// ===
-	// failed to sign request: header content-length not found
-	// ===
-	req.Header.Add("Content-Length", strconv.FormatInt(fileSize, 10))
-
-	// Beacuse we are using a bufio.Reader we need to set the length
-	// here as well, otherwise net/http will set the header
-	// "Transfer-Encoding: chunked" and remove the Content-Length header.
-	req.ContentLength = fileSize
-
-	res, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("sendAggregateFile: unable to send request: %w", err)
-	}
-
-	err = res.Body.Close()
-	if err != nil {
-		return fmt.Errorf("sendAggregateFile: unable to close HTTP body: %w", err)
-	}
-
-	if res.StatusCode != http.StatusOK {
-		return fmt.Errorf("sendAggregateFile: unexpected status code: %d", res.StatusCode)
-	}
-
-	return nil
 }
