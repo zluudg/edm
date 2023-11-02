@@ -44,6 +44,22 @@ func dnsSessionRowArrowSchema() *arrow.Schema {
 	arrowFields = append(arrowFields, arrow.Field{Name: "dest_port", Type: arrow.PrimitiveTypes.Uint16, Nullable: true})
 	arrowFields = append(arrowFields, arrow.Field{Name: "dns_protocol", Type: arrow.PrimitiveTypes.Uint8, Nullable: true})
 
+	// Common struct fields between qheader/rheader
+	headerFields := []arrow.Field{
+		{Name: "id", Type: arrow.PrimitiveTypes.Uint16},
+	}
+	// Common struct fields between qcounteris/rcounters
+	counterFields := []arrow.Field{
+		{Name: "qd", Type: arrow.PrimitiveTypes.Uint16},
+		{Name: "an", Type: arrow.PrimitiveTypes.Uint16},
+		{Name: "ns", Type: arrow.PrimitiveTypes.Uint16},
+		{Name: "ar", Type: arrow.PrimitiveTypes.Uint16},
+	}
+	arrowFields = append(arrowFields, arrow.Field{Name: "qheader", Type: arrow.StructOf(headerFields...), Nullable: true})
+	arrowFields = append(arrowFields, arrow.Field{Name: "qcounters", Type: arrow.StructOf(counterFields...), Nullable: true})
+	arrowFields = append(arrowFields, arrow.Field{Name: "rheader", Type: arrow.StructOf(headerFields...), Nullable: true})
+	arrowFields = append(arrowFields, arrow.Field{Name: "rcounters", Type: arrow.StructOf(counterFields...), Nullable: true})
+
 	return arrow.NewSchema(
 		arrowFields,
 		nil,

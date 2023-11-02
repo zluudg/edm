@@ -571,6 +571,42 @@ func (dtm *dnstapMinimiser) runMinimiser(arrowPool *memory.GoAllocator, arrowSch
 	dnsProtocol := dnsSessionRowBuilder.Field(21).(*array.Uint8Builder)
 	defer dnsProtocol.Release()
 
+	// Query header struct
+	qHeader := dnsSessionRowBuilder.Field(22).(*array.StructBuilder)
+	defer qHeader.Release()
+	qHeaderID := qHeader.FieldBuilder(0).(*array.Uint16Builder)
+	defer qHeaderID.Release()
+
+	// Query header counters, - set only if not [1,0,0,0]
+	qCounters := dnsSessionRowBuilder.Field(23).(*array.StructBuilder)
+	defer qCounters.Release()
+	qCounterQD := qCounters.FieldBuilder(0).(*array.Uint16Builder)
+	defer qCounterQD.Release()
+	qCounterAN := qCounters.FieldBuilder(1).(*array.Uint16Builder)
+	defer qCounterAN.Release()
+	qCounterNS := qCounters.FieldBuilder(2).(*array.Uint16Builder)
+	defer qCounterNS.Release()
+	qCounterAR := qCounters.FieldBuilder(3).(*array.Uint16Builder)
+	defer qCounterAR.Release()
+
+	// Response header struct
+	rHeader := dnsSessionRowBuilder.Field(24).(*array.StructBuilder)
+	defer rHeader.Release()
+	rHeaderID := rHeader.FieldBuilder(0).(*array.Uint16Builder)
+	defer rHeaderID.Release()
+
+	// Response header counters, - set only if not [1,0,0,0]
+	rCounters := dnsSessionRowBuilder.Field(25).(*array.StructBuilder)
+	defer rCounters.Release()
+	rCounterQD := rCounters.FieldBuilder(0).(*array.Uint16Builder)
+	defer rCounterQD.Release()
+	rCounterAN := rCounters.FieldBuilder(1).(*array.Uint16Builder)
+	defer rCounterAN.Release()
+	rCounterNS := rCounters.FieldBuilder(2).(*array.Uint16Builder)
+	defer rCounterNS.Release()
+	rCounterAR := rCounters.FieldBuilder(3).(*array.Uint16Builder)
+	defer rCounterAR.Release()
+
 	// Store labels in a slice so we can reference them by index
 	labelSlice := []*array.StringBuilder{label0, label1, label2, label3, label4, label5, label6, label7, label8, label9}
 	labelLimit := len(labelSlice)
@@ -726,6 +762,17 @@ minimiserLoop:
 			setPort(*dt.Message.QueryPort, sourcePort)
 			setPort(*dt.Message.ResponsePort, destPort)
 			setDNSProtocol(*dt.Message.SocketProtocol, dnsProtocol)
+			if isQuery {
+				rHeader.AppendNull()
+				rCounters.AppendNull()
+				setHeader(msg, qHeader, qHeaderID)
+				setCounters(msg, qCounters, qCounterQD, qCounterAN, qCounterNS, qCounterAR)
+			} else {
+				qHeader.AppendNull()
+				qCounters.AppendNull()
+				setHeader(msg, rHeader, rHeaderID)
+				setCounters(msg, rCounters, rCounterQD, rCounterAN, rCounterNS, rCounterAR)
+			}
 
 			// Since we have set fields in the arrow data at this
 			// point we have things to write out
@@ -985,6 +1032,33 @@ func setPort(dnstapPort uint32, arrowPortBuilder *array.Uint16Builder) {
 
 func setDNSProtocol(socketProtocol dnstap.SocketProtocol, arrowDNSProtocolBuilder *array.Uint8Builder) {
 	arrowDNSProtocolBuilder.Append(uint8(socketProtocol))
+}
+
+func setHeader(msg *dns.Msg, arrowHeaderBuilder *array.StructBuilder, arrowHeaderIDBuilder *array.Uint16Builder) {
+	arrowHeaderBuilder.Append(true)
+	arrowHeaderIDBuilder.Append(msg.Id)
+}
+
+func setCounters(msg *dns.Msg, arrowCountersBuilder *array.StructBuilder, arrowCounterQDBuilder, arrowCounterANBuilder, arrowCounterNSBuilder, arrowCounterARBuilder *array.Uint16Builder) {
+	qd := uint16(len(msg.Question))
+	an := uint16(len(msg.Answer))
+	ns := uint16(len(msg.Ns))
+	ar := uint16(len(msg.Extra))
+
+	// From https://github.com/dnstapir/datasets/blob/main/dnstap2clickhouse.schema
+	// Counters in the query package should
+	// always be just one query and nothing else
+	// - set only if not [1,0,0,0]
+	if qd == 1 && an == 0 && ns == 0 && ar == 0 {
+		arrowCountersBuilder.AppendNull()
+		return
+	}
+
+	arrowCountersBuilder.Append(true)
+	arrowCounterQDBuilder.Append(qd)
+	arrowCounterANBuilder.Append(an)
+	arrowCounterNSBuilder.Append(ns)
+	arrowCounterARBuilder.Append(ar)
 }
 
 func writeSession(dtm *dnstapMinimiser, arrowSchema *arrow.Schema, record arrow.Record, dataDir string) error {
