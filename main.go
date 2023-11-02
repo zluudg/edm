@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/binary"
 	"encoding/json"
 	"encoding/pem"
 	"flag"
@@ -534,6 +535,42 @@ func (dtm *dnstapMinimiser) runMinimiser(arrowPool *memory.GoAllocator, arrowSch
 	responseTime := dnsSessionRowBuilder.Field(11).(*array.TimestampBuilder)
 	defer responseTime.Release()
 
+	// Server ID
+	serverID := dnsSessionRowBuilder.Field(12).(*array.BinaryBuilder)
+	defer serverID.Release()
+
+	// Source IPv4
+	sourceIPv4Address := dnsSessionRowBuilder.Field(13).(*array.Uint32Builder)
+	defer sourceIPv4Address.Release()
+
+	// Destination IPv4
+	destIPv4Address := dnsSessionRowBuilder.Field(14).(*array.Uint32Builder)
+	defer destIPv4Address.Release()
+
+	// Source IPv6 split into network:host uint64 parts
+	sourceIPv6Network := dnsSessionRowBuilder.Field(15).(*array.Uint64Builder)
+	defer sourceIPv6Network.Release()
+	sourceIPv6Host := dnsSessionRowBuilder.Field(16).(*array.Uint64Builder)
+	defer sourceIPv6Host.Release()
+
+	// Dest IPv6 split into network:host uint64 parts
+	destIPv6Network := dnsSessionRowBuilder.Field(17).(*array.Uint64Builder)
+	defer destIPv6Network.Release()
+	destIPv6Host := dnsSessionRowBuilder.Field(18).(*array.Uint64Builder)
+	defer destIPv6Host.Release()
+
+	// Source port
+	sourcePort := dnsSessionRowBuilder.Field(19).(*array.Uint16Builder)
+	defer sourcePort.Release()
+
+	// Dest port
+	destPort := dnsSessionRowBuilder.Field(20).(*array.Uint16Builder)
+	defer destPort.Release()
+
+	// DNS protocol (UDP, TCP, DOT, DOH...)
+	dnsProtocol := dnsSessionRowBuilder.Field(21).(*array.Uint8Builder)
+	defer dnsProtocol.Release()
+
 	// Store labels in a slice so we can reference them by index
 	labelSlice := []*array.StringBuilder{label0, label1, label2, label3, label4, label5, label6, label7, label8, label9}
 	labelLimit := len(labelSlice)
@@ -604,6 +641,8 @@ minimiserLoop:
 
 			isQuery := strings.HasSuffix(dnstap.Message_Type_name[int32(*dt.Message.Type)], "_QUERY")
 
+			fmt.Printf("%#v\n", dt.Message)
+
 			// For now we only care about response type dnstap packets
 			if isQuery {
 				continue
@@ -658,9 +697,35 @@ minimiserLoop:
 
 			}
 
+			// Set arrow fields
 			setLabels(dtm, msg, labelLimit, labelSlice)
-
 			setTimestamp(dtm, isQuery, timestamp, queryTime, responseTime)
+			setServerID(dt, serverID)
+			switch *dt.Message.SocketFamily {
+			case dnstap.SocketFamily_INET:
+				setIPv4(dtm, dt.Message.QueryAddress, sourceIPv4Address)
+				setIPv4(dtm, dt.Message.ResponseAddress, destIPv4Address)
+				sourceIPv6Network.AppendNull()
+				sourceIPv6Host.AppendNull()
+				destIPv6Network.AppendNull()
+				destIPv6Host.AppendNull()
+			case dnstap.SocketFamily_INET6:
+				sourceIPv4Address.AppendNull()
+				destIPv4Address.AppendNull()
+				setIPv6(dtm, dt.Message.QueryAddress, sourceIPv6Network, sourceIPv6Host)
+				setIPv6(dtm, dt.Message.QueryAddress, destIPv6Network, destIPv6Host)
+			default:
+				dtm.log.Printf("packet is neither INET or INET6")
+				sourceIPv4Address.AppendNull()
+				destIPv4Address.AppendNull()
+				sourceIPv6Network.AppendNull()
+				sourceIPv6Host.AppendNull()
+				destIPv6Network.AppendNull()
+				destIPv6Host.AppendNull()
+			}
+			setPort(*dt.Message.QueryPort, sourcePort)
+			setPort(*dt.Message.ResponsePort, destPort)
+			setDNSProtocol(*dt.Message.SocketProtocol, dnsProtocol)
 
 			// Since we have set fields in the arrow data at this
 			// point we have things to write out
@@ -826,52 +891,100 @@ func parsePacket(dt *dnstap.Dnstap, isQuery bool) (*dns.Msg, time.Time) {
 	return msg, t
 }
 
-func setLabels(dtm *dnstapMinimiser, msg *dns.Msg, labelLimit int, labelSlice []*array.StringBuilder) {
+func setLabels(dtm *dnstapMinimiser, msg *dns.Msg, labelLimit int, labelBuilderSlice []*array.StringBuilder) {
 	labels := dns.SplitDomainName(msg.Question[0].Name)
 
 	// labels is nil if this is the root domain (.)
 	if labels == nil {
 		dtm.log.Printf("setting all labels to null")
-		for _, arrowLabel := range labelSlice {
-			arrowLabel.AppendNull()
+		for _, arrowLabelBuilder := range labelBuilderSlice {
+			arrowLabelBuilder.AppendNull()
 		}
 	} else {
 		reverseLabels := reverseLabelsBounded(labels, labelLimit)
 		for i, label := range reverseLabels {
 			dtm.log.Printf("setting label%d to %s", i, label)
-			labelSlice[i].Append(label)
+			labelBuilderSlice[i].Append(label)
 		}
 
 		// Fill out remaining labels with null if needed
 		if len(reverseLabels) < labelLimit {
 			for i := len(reverseLabels); i < labelLimit; i++ {
 				dtm.log.Printf("setting remaining label%d to null\n", i)
-				labelSlice[i].AppendNull()
+				labelBuilderSlice[i].AppendNull()
 			}
 		}
 	}
 }
 
-func setTimestamp(dtm *dnstapMinimiser, isQuery bool, timestamp time.Time, queryTime *array.TimestampBuilder, responseTime *array.TimestampBuilder) {
+func setTimestamp(dtm *dnstapMinimiser, isQuery bool, timestamp time.Time, queryTimeBuilder *array.TimestampBuilder, responseTimeBuilder *array.TimestampBuilder) {
 	if isQuery {
-		responseTime.AppendNull()
+		responseTimeBuilder.AppendNull()
 		arrowTimeQuery, err := arrow.TimestampFromTime(timestamp, arrow.Nanosecond)
 		if err != nil {
 			dtm.log.Printf("unable to parse query_time: %s, appending null", err)
-			queryTime.AppendNull()
+			queryTimeBuilder.AppendNull()
 		} else {
-			queryTime.Append(arrowTimeQuery)
+			queryTimeBuilder.Append(arrowTimeQuery)
 		}
 	} else {
-		queryTime.AppendNull()
+		queryTimeBuilder.AppendNull()
 		arrowTimeResponse, err := arrow.TimestampFromTime(timestamp, arrow.Nanosecond)
 		if err != nil {
 			dtm.log.Printf("unable to parse response_time: %s, appending null", err)
-			responseTime.AppendNull()
+			responseTimeBuilder.AppendNull()
 		} else {
-			responseTime.Append(arrowTimeResponse)
+			responseTimeBuilder.Append(arrowTimeResponse)
 		}
 	}
+}
+
+func setServerID(dt *dnstap.Dnstap, serverIDBuilder *array.BinaryBuilder) {
+	if len(dt.Identity) == 0 {
+		serverIDBuilder.AppendNull()
+	} else {
+		serverIDBuilder.Append(dt.Identity)
+	}
+}
+
+func setIPv4(dtm *dnstapMinimiser, dtIPBytes []byte, arrowIPv4Builder *array.Uint32Builder) {
+	ip, ok := netip.AddrFromSlice(dtIPBytes)
+	if !ok {
+		dtm.log.Printf("setIPv4: unable to create netip address from dnstap address")
+		arrowIPv4Builder.AppendNull()
+		return
+	}
+
+	// Make sure we are dealing with 4 byte IPv4 address data (and deal with IPv4-in-IPv6 addresses)
+	ip4 := ip.As4()
+
+	ipInt := binary.BigEndian.Uint32(ip4[:])
+	arrowIPv4Builder.Append(ipInt)
+}
+
+func setIPv6(dtm *dnstapMinimiser, dtIPBytes []byte, arrowIPv6NetworkBuilder *array.Uint64Builder, arrowIPv6HostBuilder *array.Uint64Builder) {
+	ip, ok := netip.AddrFromSlice(dtIPBytes)
+	if !ok {
+		dtm.log.Printf("setIPv6: unable to create netip address from dnstap address")
+		arrowIPv6NetworkBuilder.AppendNull()
+		arrowIPv6HostBuilder.AppendNull()
+		return
+	}
+
+	ip16 := ip.As16()
+
+	ipIntNetwork := binary.BigEndian.Uint64(ip16[:8])
+	ipIntHost := binary.BigEndian.Uint64(ip16[8:])
+	arrowIPv6NetworkBuilder.Append(ipIntNetwork)
+	arrowIPv6HostBuilder.Append(ipIntHost)
+}
+
+func setPort(dnstapPort uint32, arrowPortBuilder *array.Uint16Builder) {
+	arrowPortBuilder.Append(uint16(dnstapPort))
+}
+
+func setDNSProtocol(socketProtocol dnstap.SocketProtocol, arrowDNSProtocolBuilder *array.Uint8Builder) {
+	arrowDNSProtocolBuilder.Append(uint8(socketProtocol))
 }
 
 func writeSession(dtm *dnstapMinimiser, arrowSchema *arrow.Schema, record arrow.Record, dataDir string) error {
