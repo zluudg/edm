@@ -571,6 +571,14 @@ func (dtm *dnstapMinimiser) runMinimiser(arrowPool *memory.GoAllocator, arrowSch
 	dnsProtocol := dnsSessionRowBuilder.Field(21).(*array.Uint8Builder)
 	defer dnsProtocol.Release()
 
+	// Query message
+	queryMessage := dnsSessionRowBuilder.Field(22).(*array.BinaryBuilder)
+	defer queryMessage.Release()
+
+	// Response message
+	responseMessage := dnsSessionRowBuilder.Field(23).(*array.BinaryBuilder)
+	defer responseMessage.Release()
+
 	// Store labels in a slice so we can reference them by index
 	labelSlice := []*array.StringBuilder{label0, label1, label2, label3, label4, label5, label6, label7, label8, label9}
 	labelLimit := len(labelSlice)
@@ -723,9 +731,16 @@ minimiserLoop:
 				destIPv6Network.AppendNull()
 				destIPv6Host.AppendNull()
 			}
-			setPort(*dt.Message.QueryPort, sourcePort)
-			setPort(*dt.Message.ResponsePort, destPort)
-			setDNSProtocol(*dt.Message.SocketProtocol, dnsProtocol)
+			sourcePort.Append(uint16(*dt.Message.QueryPort))
+			destPort.Append(uint16(*dt.Message.ResponsePort))
+			dnsProtocol.Append(uint8(*dt.Message.SocketProtocol))
+			if isQuery {
+				responseMessage.AppendNull()
+				queryMessage.Append(dt.Message.QueryMessage)
+			} else {
+				queryMessage.AppendNull()
+				responseMessage.Append(dt.Message.ResponseMessage)
+			}
 
 			// Since we have set fields in the arrow data at this
 			// point we have things to write out
@@ -996,14 +1011,6 @@ func setIPv6(dtm *dnstapMinimiser, dtIPBytes []byte, arrowIPv6NetworkBuilder *ar
 
 	arrowIPv6NetworkBuilder.Append(ipIntNetwork)
 	arrowIPv6HostBuilder.Append(ipIntHost)
-}
-
-func setPort(dnstapPort uint32, arrowPortBuilder *array.Uint16Builder) {
-	arrowPortBuilder.Append(uint16(dnstapPort))
-}
-
-func setDNSProtocol(socketProtocol dnstap.SocketProtocol, arrowDNSProtocolBuilder *array.Uint8Builder) {
-	arrowDNSProtocolBuilder.Append(uint8(socketProtocol))
 }
 
 func writeSession(dtm *dnstapMinimiser, arrowSchema *arrow.Schema, record arrow.Record, dataDir string) error {

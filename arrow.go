@@ -43,6 +43,8 @@ func dnsSessionRowArrowSchema() *arrow.Schema {
 	arrowFields = append(arrowFields, arrow.Field{Name: "source_port", Type: arrow.PrimitiveTypes.Uint16, Nullable: true})
 	arrowFields = append(arrowFields, arrow.Field{Name: "dest_port", Type: arrow.PrimitiveTypes.Uint16, Nullable: true})
 	arrowFields = append(arrowFields, arrow.Field{Name: "dns_protocol", Type: arrow.PrimitiveTypes.Uint8, Nullable: true})
+	arrowFields = append(arrowFields, arrow.Field{Name: "query_message", Type: arrow.BinaryTypes.Binary, Nullable: true})
+	arrowFields = append(arrowFields, arrow.Field{Name: "response_message", Type: arrow.BinaryTypes.Binary, Nullable: true})
 
 	return arrow.NewSchema(
 		arrowFields,
