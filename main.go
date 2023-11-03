@@ -275,7 +275,7 @@ func main() {
 	var aesKeyLen uint32 = 32
 	aesKey := argon2.IDKey([]byte(conf.CryptoPanKey), []byte(*cryptoPanKeySalt), 1, 64*1024, 4, aesKeyLen)
 
-	dnsSessionRowSchema, rDataTypeCodeMap := dnsSessionRowArrowSchema()
+	dnsSessionRowSchema := dnsSessionRowArrowSchema()
 	fmt.Println(dnsSessionRowSchema)
 
 	arrowPool := memory.NewGoAllocator()
@@ -331,7 +331,7 @@ func main() {
 	defer dnsSessionRowBuilder.Release()
 
 	// Start minimiser
-	go dtm.runMinimiser(arrowPool, dnsSessionRowSchema, rDataTypeCodeMap, dnsSessionRowBuilder, *dawgFile, *dataDir, mqttPub, seenQnameLRU, *newQnameBuffer, aggregSender)
+	go dtm.runMinimiser(arrowPool, dnsSessionRowSchema, dnsSessionRowBuilder, *dawgFile, *dataDir, mqttPub, seenQnameLRU, *newQnameBuffer, aggregSender)
 
 	// Start dnstap.Input
 	go dti.ReadInto(dtm.inputChannel)
@@ -502,7 +502,7 @@ func (wkd *wellKnownDomainsTracker) rotateTracker(dawgFile string) (*wellKnownDo
 // runMinimiser reads frames from the inputChannel, doing any modifications and
 // then passes them on to a dnstap.Output. To gracefully stop
 // runMinimiser() you need to close the dtm.stop channel.
-func (dtm *dnstapMinimiser) runMinimiser(arrowPool *memory.GoAllocator, arrowSchema *arrow.Schema, arrowRDataTypeCodeMap map[uint16]arrow.UnionTypeCode, dnsSessionRowBuilder *array.RecordBuilder, dawgFile string, dataDir string, mqttPub mqttPublisher, seenQnameLRU *lru.Cache[string, struct{}], newQnameBuffer int, aggSender aggregateSender) {
+func (dtm *dnstapMinimiser) runMinimiser(arrowPool *memory.GoAllocator, arrowSchema *arrow.Schema, dnsSessionRowBuilder *array.RecordBuilder, dawgFile string, dataDir string, mqttPub mqttPublisher, seenQnameLRU *lru.Cache[string, struct{}], newQnameBuffer int, aggSender aggregateSender) {
 	dt := &dnstap.Dnstap{}
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -570,64 +570,6 @@ func (dtm *dnstapMinimiser) runMinimiser(arrowPool *memory.GoAllocator, arrowSch
 	// DNS protocol (UDP, TCP, DOT, DOH...)
 	dnsProtocol := dnsSessionRowBuilder.Field(21).(*array.Uint8Builder)
 	defer dnsProtocol.Release()
-
-	// Query header struct
-	qHeader := dnsSessionRowBuilder.Field(22).(*array.StructBuilder)
-	defer qHeader.Release()
-	qHeaderID := qHeader.FieldBuilder(0).(*array.Uint16Builder)
-	defer qHeaderID.Release()
-
-	// Query header counters, - set only if not [1,0,0,0]
-	qCounters := dnsSessionRowBuilder.Field(23).(*array.StructBuilder)
-	defer qCounters.Release()
-	qCounterQD := qCounters.FieldBuilder(0).(*array.Uint16Builder)
-	defer qCounterQD.Release()
-	qCounterAN := qCounters.FieldBuilder(1).(*array.Uint16Builder)
-	defer qCounterAN.Release()
-	qCounterNS := qCounters.FieldBuilder(2).(*array.Uint16Builder)
-	defer qCounterNS.Release()
-	qCounterAR := qCounters.FieldBuilder(3).(*array.Uint16Builder)
-	defer qCounterAR.Release()
-
-	// Response header struct
-	rHeader := dnsSessionRowBuilder.Field(24).(*array.StructBuilder)
-	defer rHeader.Release()
-	rHeaderID := rHeader.FieldBuilder(0).(*array.Uint16Builder)
-	defer rHeaderID.Release()
-
-	// Response header counters, - set only if not [1,0,0,0]
-	rCounters := dnsSessionRowBuilder.Field(25).(*array.StructBuilder)
-	defer rCounters.Release()
-	rCounterQD := rCounters.FieldBuilder(0).(*array.Uint16Builder)
-	defer rCounterQD.Release()
-	rCounterAN := rCounters.FieldBuilder(1).(*array.Uint16Builder)
-	defer rCounterAN.Release()
-	rCounterNS := rCounters.FieldBuilder(2).(*array.Uint16Builder)
-	defer rCounterNS.Release()
-	rCounterAR := rCounters.FieldBuilder(3).(*array.Uint16Builder)
-	defer rCounterAR.Release()
-
-	// Record
-	records := dnsSessionRowBuilder.Field(26).(*array.ListBuilder)
-	defer records.Release()
-	record := records.ValueBuilder().(*array.StructBuilder)
-	defer record.Release()
-	recordName := record.FieldBuilder(0).(*array.StringBuilder)
-	defer recordName.Release()
-	recordType := record.FieldBuilder(1).(*array.Uint16Builder)
-	defer recordType.Release()
-	recordClass := record.FieldBuilder(2).(*array.Uint16Builder)
-	defer recordClass.Release()
-	recordTTL := record.FieldBuilder(3).(*array.Uint32Builder)
-	defer recordTTL.Release()
-	recordRDLength := record.FieldBuilder(4).(*array.Uint16Builder)
-	defer recordRDLength.Release()
-	recordRData := record.FieldBuilder(5).(*array.DenseUnionBuilder)
-	defer recordRData.Release()
-	rdA := recordRData.Child(0).(*array.StructBuilder)
-	defer rdA.Release()
-	rdAAddress := rdA.FieldBuilder(0).(*array.Uint32Builder)
-	defer rdAAddress.Release()
 
 	// Store labels in a slice so we can reference them by index
 	labelSlice := []*array.StringBuilder{label0, label1, label2, label3, label4, label5, label6, label7, label8, label9}
@@ -784,18 +726,6 @@ minimiserLoop:
 			setPort(*dt.Message.QueryPort, sourcePort)
 			setPort(*dt.Message.ResponsePort, destPort)
 			setDNSProtocol(*dt.Message.SocketProtocol, dnsProtocol)
-			if isQuery {
-				rHeader.AppendNull()
-				rCounters.AppendNull()
-				setHeader(msg, qHeader, qHeaderID)
-				setCounters(msg, isQuery, qCounters, qCounterQD, qCounterAN, qCounterNS, qCounterAR)
-			} else {
-				qHeader.AppendNull()
-				qCounters.AppendNull()
-				setHeader(msg, rHeader, rHeaderID)
-				setCounters(msg, isQuery, rCounters, rCounterQD, rCounterAN, rCounterNS, rCounterAR)
-			}
-			setRecord(dtm, msg, arrowRDataTypeCodeMap, records, record, recordName, recordType, recordClass, recordTTL, recordRDLength, recordRData, rdA, rdAAddress)
 
 			// Since we have set fields in the arrow data at this
 			// point we have things to write out
@@ -1064,68 +994,6 @@ func setPort(dnstapPort uint32, arrowPortBuilder *array.Uint16Builder) {
 
 func setDNSProtocol(socketProtocol dnstap.SocketProtocol, arrowDNSProtocolBuilder *array.Uint8Builder) {
 	arrowDNSProtocolBuilder.Append(uint8(socketProtocol))
-}
-
-func setHeader(msg *dns.Msg, arrowHeaderBuilder *array.StructBuilder, arrowHeaderIDBuilder *array.Uint16Builder) {
-	arrowHeaderBuilder.Append(true)
-	arrowHeaderIDBuilder.Append(msg.Id)
-}
-
-func setCounters(msg *dns.Msg, isQuery bool, arrowCountersBuilder *array.StructBuilder, arrowCounterQDBuilder, arrowCounterANBuilder, arrowCounterNSBuilder, arrowCounterARBuilder *array.Uint16Builder) {
-	qd := uint16(len(msg.Question))
-	an := uint16(len(msg.Answer))
-	ns := uint16(len(msg.Ns))
-	ar := uint16(len(msg.Extra))
-
-	// From https://github.com/dnstapir/datasets/blob/main/dnstap2clickhouse.schema
-	// Counters in the query package should
-	// always be just one query and nothing else
-	// - set only if not [1,0,0,0]
-	if isQuery {
-		if qd == 1 && an == 0 && ns == 0 && ar == 0 {
-			arrowCountersBuilder.AppendNull()
-			return
-		}
-	}
-
-	arrowCountersBuilder.Append(true)
-	arrowCounterQDBuilder.Append(qd)
-	arrowCounterANBuilder.Append(an)
-	arrowCounterNSBuilder.Append(ns)
-	arrowCounterARBuilder.Append(ar)
-}
-
-func setRecord(dtm *dnstapMinimiser, msg *dns.Msg, arrowRDataTypeCodeMap map[uint16]arrow.UnionTypeCode, records *array.ListBuilder, record *array.StructBuilder, recordNameBuilder *array.StringBuilder, recordTypeBuilder *array.Uint16Builder, recordClassBuilder *array.Uint16Builder, recordTTLBuilder *array.Uint32Builder, recordRDLengthBuilder *array.Uint16Builder, recordRDataBuilder *array.DenseUnionBuilder, arrowRdABuilder *array.StructBuilder, arrowRdAAddress *array.Uint32Builder) {
-	if len(msg.Answer) == 0 {
-		records.AppendNull()
-		return
-	}
-	records.Append(true)
-	for _, rr := range msg.Answer {
-		record.Append(true)
-		recordNameBuilder.Append(rr.Header().Name)
-		recordTypeBuilder.Append(rr.Header().Rrtype)
-		recordClassBuilder.Append(rr.Header().Class)
-		recordTTLBuilder.Append(rr.Header().Ttl)
-		recordRDLengthBuilder.Append(rr.Header().Rdlength)
-		switch record := rr.(type) {
-		case *dns.A:
-			arrowTypeCode, ok := arrowRDataTypeCodeMap[record.Hdr.Rrtype]
-			if ok {
-				recordRDataBuilder.Append(arrowTypeCode)
-				arrowRdABuilder.Append(true)
-				ipInt, err := ipBytesToInt(record.A)
-				if err != nil {
-					dtm.log.Printf("unable to create uint32 for ip: %s", err)
-					arrowRdAAddress.AppendNull()
-					continue
-				}
-				arrowRdAAddress.Append(ipInt)
-			}
-		default:
-			recordRDataBuilder.AppendNull()
-		}
-	}
 }
 
 func writeSession(dtm *dnstapMinimiser, arrowSchema *arrow.Schema, record arrow.Record, dataDir string) error {
