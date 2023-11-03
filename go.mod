@@ -4,7 +4,6 @@ go 1.21.3
 
 require (
 	github.com/BurntSushi/toml v1.3.2
-	github.com/apache/arrow/go/v13 v13.0.0
 	github.com/apache/arrow/go/v14 v14.0.0
 	github.com/dnstap/golang-dnstap v0.4.0
 	github.com/eclipse/paho.golang v0.12.0
