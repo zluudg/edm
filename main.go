@@ -28,10 +28,10 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
-	"github.com/apache/arrow/go/v13/arrow"
-	"github.com/apache/arrow/go/v13/arrow/array"
-	"github.com/apache/arrow/go/v13/arrow/memory"
-	"github.com/apache/arrow/go/v13/parquet/pqarrow"
+	"github.com/apache/arrow/go/v14/arrow"
+	"github.com/apache/arrow/go/v14/arrow/array"
+	"github.com/apache/arrow/go/v14/arrow/memory"
+	"github.com/apache/arrow/go/v14/parquet/pqarrow"
 	dnstap "github.com/dnstap/golang-dnstap"
 	"github.com/dnstapir/dtm/pkg/protocols"
 	"github.com/eclipse/paho.golang/paho"
@@ -275,7 +275,7 @@ func main() {
 	var aesKeyLen uint32 = 32
 	aesKey := argon2.IDKey([]byte(conf.CryptoPanKey), []byte(*cryptoPanKeySalt), 1, 64*1024, 4, aesKeyLen)
 
-	dnsSessionRowSchema := dnsSessionRowArrowSchema()
+	dnsSessionRowSchema, rDataTypeCodeMap := dnsSessionRowArrowSchema()
 	fmt.Println(dnsSessionRowSchema)
 
 	arrowPool := memory.NewGoAllocator()
@@ -331,7 +331,7 @@ func main() {
 	defer dnsSessionRowBuilder.Release()
 
 	// Start minimiser
-	go dtm.runMinimiser(arrowPool, dnsSessionRowSchema, dnsSessionRowBuilder, *dawgFile, *dataDir, mqttPub, seenQnameLRU, *newQnameBuffer, aggregSender)
+	go dtm.runMinimiser(arrowPool, dnsSessionRowSchema, rDataTypeCodeMap, dnsSessionRowBuilder, *dawgFile, *dataDir, mqttPub, seenQnameLRU, *newQnameBuffer, aggregSender)
 
 	// Start dnstap.Input
 	go dti.ReadInto(dtm.inputChannel)
@@ -502,7 +502,7 @@ func (wkd *wellKnownDomainsTracker) rotateTracker(dawgFile string) (*wellKnownDo
 // runMinimiser reads frames from the inputChannel, doing any modifications and
 // then passes them on to a dnstap.Output. To gracefully stop
 // runMinimiser() you need to close the dtm.stop channel.
-func (dtm *dnstapMinimiser) runMinimiser(arrowPool *memory.GoAllocator, arrowSchema *arrow.Schema, dnsSessionRowBuilder *array.RecordBuilder, dawgFile string, dataDir string, mqttPub mqttPublisher, seenQnameLRU *lru.Cache[string, struct{}], newQnameBuffer int, aggSender aggregateSender) {
+func (dtm *dnstapMinimiser) runMinimiser(arrowPool *memory.GoAllocator, arrowSchema *arrow.Schema, arrowRDataTypeCodeMap map[uint16]arrow.UnionTypeCode, dnsSessionRowBuilder *array.RecordBuilder, dawgFile string, dataDir string, mqttPub mqttPublisher, seenQnameLRU *lru.Cache[string, struct{}], newQnameBuffer int, aggSender aggregateSender) {
 	dt := &dnstap.Dnstap{}
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -606,6 +606,28 @@ func (dtm *dnstapMinimiser) runMinimiser(arrowPool *memory.GoAllocator, arrowSch
 	defer rCounterNS.Release()
 	rCounterAR := rCounters.FieldBuilder(3).(*array.Uint16Builder)
 	defer rCounterAR.Release()
+
+	// Record
+	records := dnsSessionRowBuilder.Field(26).(*array.ListBuilder)
+	defer records.Release()
+	record := records.ValueBuilder().(*array.StructBuilder)
+	defer record.Release()
+	recordName := record.FieldBuilder(0).(*array.StringBuilder)
+	defer recordName.Release()
+	recordType := record.FieldBuilder(1).(*array.Uint16Builder)
+	defer recordType.Release()
+	recordClass := record.FieldBuilder(2).(*array.Uint16Builder)
+	defer recordClass.Release()
+	recordTTL := record.FieldBuilder(3).(*array.Uint32Builder)
+	defer recordTTL.Release()
+	recordRDLength := record.FieldBuilder(4).(*array.Uint16Builder)
+	defer recordRDLength.Release()
+	recordRData := record.FieldBuilder(5).(*array.DenseUnionBuilder)
+	defer recordRData.Release()
+	rdA := recordRData.Child(0).(*array.StructBuilder)
+	defer rdA.Release()
+	rdAAddress := rdA.FieldBuilder(0).(*array.Uint32Builder)
+	defer rdAAddress.Release()
 
 	// Store labels in a slice so we can reference them by index
 	labelSlice := []*array.StringBuilder{label0, label1, label2, label3, label4, label5, label6, label7, label8, label9}
@@ -766,13 +788,14 @@ minimiserLoop:
 				rHeader.AppendNull()
 				rCounters.AppendNull()
 				setHeader(msg, qHeader, qHeaderID)
-				setCounters(msg, qCounters, qCounterQD, qCounterAN, qCounterNS, qCounterAR)
+				setCounters(msg, isQuery, qCounters, qCounterQD, qCounterAN, qCounterNS, qCounterAR)
 			} else {
 				qHeader.AppendNull()
 				qCounters.AppendNull()
 				setHeader(msg, rHeader, rHeaderID)
-				setCounters(msg, rCounters, rCounterQD, rCounterAN, rCounterNS, rCounterAR)
+				setCounters(msg, isQuery, rCounters, rCounterQD, rCounterAN, rCounterNS, rCounterAR)
 			}
+			setRecord(dtm, msg, arrowRDataTypeCodeMap, records, record, recordName, recordType, recordClass, recordTTL, recordRDLength, recordRData, rdA, rdAAddress)
 
 			// Since we have set fields in the arrow data at this
 			// point we have things to write out
@@ -994,18 +1017,27 @@ func setServerID(dt *dnstap.Dnstap, serverIDBuilder *array.BinaryBuilder) {
 	}
 }
 
-func setIPv4(dtm *dnstapMinimiser, dtIPBytes []byte, arrowIPv4Builder *array.Uint32Builder) {
-	ip, ok := netip.AddrFromSlice(dtIPBytes)
+func ipBytesToInt(ipBytes []byte) (uint32, error) {
+	ip, ok := netip.AddrFromSlice(ipBytes)
 	if !ok {
-		dtm.log.Printf("setIPv4: unable to create netip address from dnstap address")
-		arrowIPv4Builder.AppendNull()
-		return
+		return 0, fmt.Errorf("ipBytesToInt: unable to parse bytes")
 	}
 
 	// Make sure we are dealing with 4 byte IPv4 address data (and deal with IPv4-in-IPv6 addresses)
 	ip4 := ip.As4()
 
 	ipInt := binary.BigEndian.Uint32(ip4[:])
+
+	return ipInt, nil
+}
+
+func setIPv4(dtm *dnstapMinimiser, dtIPBytes []byte, arrowIPv4Builder *array.Uint32Builder) {
+	ipInt, err := ipBytesToInt(dtIPBytes)
+	if err != nil {
+		dtm.log.Printf("setIPv4: unable to create uint32 from dnstap address: %s", err)
+		arrowIPv4Builder.AppendNull()
+		return
+	}
 	arrowIPv4Builder.Append(ipInt)
 }
 
@@ -1039,7 +1071,7 @@ func setHeader(msg *dns.Msg, arrowHeaderBuilder *array.StructBuilder, arrowHeade
 	arrowHeaderIDBuilder.Append(msg.Id)
 }
 
-func setCounters(msg *dns.Msg, arrowCountersBuilder *array.StructBuilder, arrowCounterQDBuilder, arrowCounterANBuilder, arrowCounterNSBuilder, arrowCounterARBuilder *array.Uint16Builder) {
+func setCounters(msg *dns.Msg, isQuery bool, arrowCountersBuilder *array.StructBuilder, arrowCounterQDBuilder, arrowCounterANBuilder, arrowCounterNSBuilder, arrowCounterARBuilder *array.Uint16Builder) {
 	qd := uint16(len(msg.Question))
 	an := uint16(len(msg.Answer))
 	ns := uint16(len(msg.Ns))
@@ -1049,9 +1081,11 @@ func setCounters(msg *dns.Msg, arrowCountersBuilder *array.StructBuilder, arrowC
 	// Counters in the query package should
 	// always be just one query and nothing else
 	// - set only if not [1,0,0,0]
-	if qd == 1 && an == 0 && ns == 0 && ar == 0 {
-		arrowCountersBuilder.AppendNull()
-		return
+	if isQuery {
+		if qd == 1 && an == 0 && ns == 0 && ar == 0 {
+			arrowCountersBuilder.AppendNull()
+			return
+		}
 	}
 
 	arrowCountersBuilder.Append(true)
@@ -1059,6 +1093,39 @@ func setCounters(msg *dns.Msg, arrowCountersBuilder *array.StructBuilder, arrowC
 	arrowCounterANBuilder.Append(an)
 	arrowCounterNSBuilder.Append(ns)
 	arrowCounterARBuilder.Append(ar)
+}
+
+func setRecord(dtm *dnstapMinimiser, msg *dns.Msg, arrowRDataTypeCodeMap map[uint16]arrow.UnionTypeCode, records *array.ListBuilder, record *array.StructBuilder, recordNameBuilder *array.StringBuilder, recordTypeBuilder *array.Uint16Builder, recordClassBuilder *array.Uint16Builder, recordTTLBuilder *array.Uint32Builder, recordRDLengthBuilder *array.Uint16Builder, recordRDataBuilder *array.DenseUnionBuilder, arrowRdABuilder *array.StructBuilder, arrowRdAAddress *array.Uint32Builder) {
+	if len(msg.Answer) == 0 {
+		records.AppendNull()
+		return
+	}
+	records.Append(true)
+	for _, rr := range msg.Answer {
+		record.Append(true)
+		recordNameBuilder.Append(rr.Header().Name)
+		recordTypeBuilder.Append(rr.Header().Rrtype)
+		recordClassBuilder.Append(rr.Header().Class)
+		recordTTLBuilder.Append(rr.Header().Ttl)
+		recordRDLengthBuilder.Append(rr.Header().Rdlength)
+		switch record := rr.(type) {
+		case *dns.A:
+			arrowTypeCode, ok := arrowRDataTypeCodeMap[record.Hdr.Rrtype]
+			if ok {
+				recordRDataBuilder.Append(arrowTypeCode)
+				arrowRdABuilder.Append(true)
+				ipInt, err := ipBytesToInt(record.A)
+				if err != nil {
+					dtm.log.Printf("unable to create uint32 for ip: %s", err)
+					arrowRdAAddress.AppendNull()
+					continue
+				}
+				arrowRdAAddress.Append(ipInt)
+			}
+		default:
+			recordRDataBuilder.AppendNull()
+		}
+	}
 }
 
 func writeSession(dtm *dnstapMinimiser, arrowSchema *arrow.Schema, record arrow.Record, dataDir string) error {
