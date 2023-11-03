@@ -947,8 +947,8 @@ func setServerID(dt *dnstap.Dnstap, serverIDBuilder *array.BinaryBuilder) {
 	}
 }
 
-func ipBytesToInt(ipBytes []byte) (uint32, error) {
-	ip, ok := netip.AddrFromSlice(ipBytes)
+func ipBytesToInt(ip4Bytes []byte) (uint32, error) {
+	ip, ok := netip.AddrFromSlice(ip4Bytes)
 	if !ok {
 		return 0, fmt.Errorf("ipBytesToInt: unable to parse bytes")
 	}
@@ -959,6 +959,20 @@ func ipBytesToInt(ipBytes []byte) (uint32, error) {
 	ipInt := binary.BigEndian.Uint32(ip4[:])
 
 	return ipInt, nil
+}
+
+func ip6BytesToInt(ip6Bytes []byte) (uint64, uint64, error) {
+	ip, ok := netip.AddrFromSlice(ip6Bytes)
+	if !ok {
+		return 0, 0, fmt.Errorf("ip6BytesToInt: unable to parse bytes")
+	}
+
+	ip16 := ip.As16()
+
+	ipIntNetwork := binary.BigEndian.Uint64(ip16[:8])
+	ipIntHost := binary.BigEndian.Uint64(ip16[8:])
+
+	return ipIntNetwork, ipIntHost, nil
 }
 
 func setIPv4(dtm *dnstapMinimiser, dtIPBytes []byte, arrowIPv4Builder *array.Uint32Builder) {
@@ -972,18 +986,14 @@ func setIPv4(dtm *dnstapMinimiser, dtIPBytes []byte, arrowIPv4Builder *array.Uin
 }
 
 func setIPv6(dtm *dnstapMinimiser, dtIPBytes []byte, arrowIPv6NetworkBuilder *array.Uint64Builder, arrowIPv6HostBuilder *array.Uint64Builder) {
-	ip, ok := netip.AddrFromSlice(dtIPBytes)
-	if !ok {
-		dtm.log.Printf("setIPv6: unable to create netip address from dnstap address")
+	ipIntNetwork, ipIntHost, err := ip6BytesToInt(dtIPBytes)
+	if err != nil {
+		dtm.log.Printf("setIPv6: unable to create uint64 variables from dnstap address: %s", err)
 		arrowIPv6NetworkBuilder.AppendNull()
 		arrowIPv6HostBuilder.AppendNull()
 		return
 	}
 
-	ip16 := ip.As16()
-
-	ipIntNetwork := binary.BigEndian.Uint64(ip16[:8])
-	ipIntHost := binary.BigEndian.Uint64(ip16[8:])
 	arrowIPv6NetworkBuilder.Append(ipIntNetwork)
 	arrowIPv6HostBuilder.Append(ipIntHost)
 }
