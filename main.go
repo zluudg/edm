@@ -28,10 +28,6 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
-	"github.com/apache/arrow/go/v14/arrow"
-	"github.com/apache/arrow/go/v14/arrow/array"
-	"github.com/apache/arrow/go/v14/arrow/memory"
-	"github.com/apache/arrow/go/v14/parquet/pqarrow"
 	dnstap "github.com/dnstap/golang-dnstap"
 	"github.com/dnstapir/dtm/pkg/protocols"
 	"github.com/eclipse/paho.golang/paho"
@@ -79,6 +75,37 @@ type histogramData struct {
 	V6ClientCountHLLBytes []byte `parquet:"name=v6client_count, type=MAP, convertedtype=LIST, valuetype=BYTE_ARRAY"`
 }
 
+type sessionData struct {
+	// Would be nice to share the label0-9 fields from histogramData but
+	// embedding doesnt seem to work that way:
+	// https://github.com/xitongsys/parquet-go/issues/203
+	Label0       *string `parquet:"name=label0, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label1       *string `parquet:"name=label1, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label2       *string `parquet:"name=label2, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label3       *string `parquet:"name=label3, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label4       *string `parquet:"name=label4, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label5       *string `parquet:"name=label5, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label6       *string `parquet:"name=label6, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label7       *string `parquet:"name=label7, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label8       *string `parquet:"name=label8, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label9       *string `parquet:"name=label9, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	ServerID     *string `parquet:"name=server_id, type=BYTE_ARRAY"`
+	QueryTime    *int64  `parquet:"name=query_time, type=INT64, logicaltype=TIMESTAMP, logicaltype.isadjustedtoutc=true, logicaltype.unit=MICROS"`
+	ResponseTime *int64  `parquet:"name=response_time, type=INT64, logicaltype=TIMESTAMP, logicaltype.isadjustedtoutc=true, logicaltype.unit=MICROS"`
+	SourceIPv4   *int32  `parquet:"name=source_ipv4, type=INT32, convertedtype=UINT_32"`
+	DestIPv4     *int32  `parquet:"name=dest_ipv4, type=INT32, convertedtype=UINT_32"`
+	// IPv6 addresses are split up into a network and host part, for one thing go does not have native uint128 types
+	SourceIPv6Network *int64  `parquet:"name=source_ipv6_network, type=INT64, convertedtype=UINT_64"`
+	SourceIPv6Host    *int64  `parquet:"name=source_ipv6_host, type=INT64, convertedtype=UINT_64"`
+	DestIPv6Network   *int64  `parquet:"name=dest_ipv6_network, type=INT64, convertedtype=UINT_64"`
+	DestIPv6Host      *int64  `parquet:"name=dest_ipv6_host, type=INT64, convertedtype=UINT_64"`
+	SourcePort        *int32  `parquet:"name=source_port, type=INT32, convertedtype=UINT_16"`
+	DestPort          *int32  `parquet:"name=dest_port, type=INT32, convertedtype=UINT_16"`
+	DNSProtocol       *int32  `parquet:"name=dns_protocol, type=INT32, convertedtype=UINT_8"`
+	QueryMessage      *string `parquet:"name=query_message, type=BYTE_ARRAY"`
+	ResponseMessage   *string `parquet:"name=response_message, type=BYTE_ARRAY"`
+}
+
 func readConfig(configFile string) (dtmConfig, error) {
 	conf := dtmConfig{}
 	if _, err := toml.DecodeFile(configFile, &conf); err != nil {
@@ -103,6 +130,24 @@ func setHistogramLabels(labels []string, labelLimit int, hd *histogramData) *his
 	}
 
 	return hd
+}
+
+func setSessionLabels(labels []string, labelLimit int, sd *sessionData) *sessionData {
+	// If labels is nil (the "." zone) we can depend on the zero type of
+	// the label fields being nil, so nothing to do
+	if labels == nil {
+		return sd
+	}
+
+	reverseLabels := reverseLabelsBounded(labels, labelLimit)
+
+	s := reflect.ValueOf(sd).Elem()
+
+	for index := range reverseLabels {
+		s.FieldByName("Label" + strconv.Itoa(index)).Set(reflect.ValueOf(&reverseLabels[index]))
+	}
+
+	return sd
 }
 
 func reverseLabelsBounded(labels []string, maxLen int) []string {
@@ -275,11 +320,6 @@ func main() {
 	var aesKeyLen uint32 = 32
 	aesKey := argon2.IDKey([]byte(conf.CryptoPanKey), []byte(*cryptoPanKeySalt), 1, 64*1024, 4, aesKeyLen)
 
-	dnsSessionRowSchema := dnsSessionRowArrowSchema()
-	fmt.Println(dnsSessionRowSchema)
-
-	arrowPool := memory.NewGoAllocator()
-
 	// Create an instance of the minimiser
 	dtm, err := newDnstapMinimiser(log.Default(), aesKey, *debug)
 	if err != nil {
@@ -327,11 +367,8 @@ func main() {
 		close(dtm.stop)
 	}()
 
-	dnsSessionRowBuilder := array.NewRecordBuilder(arrowPool, dnsSessionRowSchema)
-	defer dnsSessionRowBuilder.Release()
-
 	// Start minimiser
-	go dtm.runMinimiser(arrowPool, dnsSessionRowSchema, dnsSessionRowBuilder, *dawgFile, *dataDir, mqttPub, seenQnameLRU, *newQnameBuffer, aggregSender)
+	go dtm.runMinimiser(*dawgFile, *dataDir, mqttPub, seenQnameLRU, *newQnameBuffer, aggregSender)
 
 	// Start dnstap.Input
 	go dti.ReadInto(dtm.inputChannel)
@@ -502,96 +539,23 @@ func (wkd *wellKnownDomainsTracker) rotateTracker(dawgFile string) (*wellKnownDo
 // runMinimiser reads frames from the inputChannel, doing any modifications and
 // then passes them on to a dnstap.Output. To gracefully stop
 // runMinimiser() you need to close the dtm.stop channel.
-func (dtm *dnstapMinimiser) runMinimiser(arrowPool *memory.GoAllocator, arrowSchema *arrow.Schema, dnsSessionRowBuilder *array.RecordBuilder, dawgFile string, dataDir string, mqttPub mqttPublisher, seenQnameLRU *lru.Cache[string, struct{}], newQnameBuffer int, aggSender aggregateSender) {
+func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPub mqttPublisher, seenQnameLRU *lru.Cache[string, struct{}], newQnameBuffer int, aggSender aggregateSender) {
 	dt := &dnstap.Dnstap{}
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
-	// Labels
-	label0 := dnsSessionRowBuilder.Field(0).(*array.StringBuilder)
-	defer label0.Release()
-	label1 := dnsSessionRowBuilder.Field(1).(*array.StringBuilder)
-	defer label1.Release()
-	label2 := dnsSessionRowBuilder.Field(2).(*array.StringBuilder)
-	defer label1.Release()
-	label3 := dnsSessionRowBuilder.Field(3).(*array.StringBuilder)
-	defer label3.Release()
-	label4 := dnsSessionRowBuilder.Field(4).(*array.StringBuilder)
-	defer label4.Release()
-	label5 := dnsSessionRowBuilder.Field(5).(*array.StringBuilder)
-	defer label5.Release()
-	label6 := dnsSessionRowBuilder.Field(6).(*array.StringBuilder)
-	defer label6.Release()
-	label7 := dnsSessionRowBuilder.Field(7).(*array.StringBuilder)
-	defer label7.Release()
-	label8 := dnsSessionRowBuilder.Field(8).(*array.StringBuilder)
-	defer label8.Release()
-	label9 := dnsSessionRowBuilder.Field(9).(*array.StringBuilder)
-	defer label9.Release()
-
-	// Timestamps
-	queryTime := dnsSessionRowBuilder.Field(10).(*array.TimestampBuilder)
-	defer queryTime.Release()
-	responseTime := dnsSessionRowBuilder.Field(11).(*array.TimestampBuilder)
-	defer responseTime.Release()
-
-	// Server ID
-	serverID := dnsSessionRowBuilder.Field(12).(*array.BinaryBuilder)
-	defer serverID.Release()
-
-	// Source IPv4
-	sourceIPv4Address := dnsSessionRowBuilder.Field(13).(*array.Uint32Builder)
-	defer sourceIPv4Address.Release()
-
-	// Destination IPv4
-	destIPv4Address := dnsSessionRowBuilder.Field(14).(*array.Uint32Builder)
-	defer destIPv4Address.Release()
-
-	// Source IPv6 split into network:host uint64 parts
-	sourceIPv6Network := dnsSessionRowBuilder.Field(15).(*array.Uint64Builder)
-	defer sourceIPv6Network.Release()
-	sourceIPv6Host := dnsSessionRowBuilder.Field(16).(*array.Uint64Builder)
-	defer sourceIPv6Host.Release()
-
-	// Dest IPv6 split into network:host uint64 parts
-	destIPv6Network := dnsSessionRowBuilder.Field(17).(*array.Uint64Builder)
-	defer destIPv6Network.Release()
-	destIPv6Host := dnsSessionRowBuilder.Field(18).(*array.Uint64Builder)
-	defer destIPv6Host.Release()
-
-	// Source port
-	sourcePort := dnsSessionRowBuilder.Field(19).(*array.Uint16Builder)
-	defer sourcePort.Release()
-
-	// Dest port
-	destPort := dnsSessionRowBuilder.Field(20).(*array.Uint16Builder)
-	defer destPort.Release()
-
-	// DNS protocol (UDP, TCP, DOT, DOH...)
-	dnsProtocol := dnsSessionRowBuilder.Field(21).(*array.Uint8Builder)
-	defer dnsProtocol.Release()
-
-	// Query message
-	queryMessage := dnsSessionRowBuilder.Field(22).(*array.BinaryBuilder)
-	defer queryMessage.Release()
-
-	// Response message
-	responseMessage := dnsSessionRowBuilder.Field(23).(*array.BinaryBuilder)
-	defer responseMessage.Release()
-
-	// Store labels in a slice so we can reference them by index
-	labelSlice := []*array.StringBuilder{label0, label1, label2, label3, label4, label5, label6, label7, label8, label9}
-	labelLimit := len(labelSlice)
+	// Labels 0-9
+	labelLimit := 10
 
 	// Keep track of if we have recorded any dnstap packets in arrow data
-	var arrow_updated bool
+	var session_updated bool
 
 	// Setup channels for feeding writers and data senders that should do
 	// their work outside the main minimiser loop. They are buffered to
 	// to not block the loop if writing/sending data is slow.
 	// NOTE: Remember to close all of these channels at the end of the
 	// minimiser loop, otherwise the program can hang on shutdown.
-	sessionWriterCh := make(chan arrow.Record, 100)
+	sessionWriterCh := make(chan []*sessionData, 100)
 	histogramWriterCh := make(chan *wellKnownDomainsData, 100)
 	// This channel is only used for stopping the goroutine, so no buffer needed
 	histogramSenderCloserCh := make(chan struct{})
@@ -618,7 +582,7 @@ func (dtm *dnstapMinimiser) runMinimiser(arrowPool *memory.GoAllocator, arrowSch
 
 	// Start record writers and data senders in the background
 	wg.Add(1)
-	go sessionWriter(dtm, arrowSchema, sessionWriterCh, dataDir, &wg)
+	go sessionWriter(dtm, sessionWriterCh, dataDir, &wg)
 	wg.Add(1)
 	go histogramWriter(dtm, histogramWriterCh, labelLimit, outboxDir, &wg)
 	wg.Add(1)
@@ -637,6 +601,8 @@ func (dtm *dnstapMinimiser) runMinimiser(arrowPool *memory.GoAllocator, arrowSch
 		slog.Error(err.Error())
 		os.Exit(1)
 	}
+
+	sessions := []*sessionData{}
 
 minimiserLoop:
 	for {
@@ -705,53 +671,29 @@ minimiserLoop:
 
 			}
 
-			// Set arrow fields
-			setLabels(dtm, msg, labelLimit, labelSlice)
-			setTimestamp(dtm, isQuery, timestamp, queryTime, responseTime)
-			setServerID(dt, serverID)
-			switch *dt.Message.SocketFamily {
-			case dnstap.SocketFamily_INET:
-				setIPv4(dtm, dt.Message.QueryAddress, sourceIPv4Address)
-				setIPv4(dtm, dt.Message.ResponseAddress, destIPv4Address)
-				sourceIPv6Network.AppendNull()
-				sourceIPv6Host.AppendNull()
-				destIPv6Network.AppendNull()
-				destIPv6Host.AppendNull()
-			case dnstap.SocketFamily_INET6:
-				sourceIPv4Address.AppendNull()
-				destIPv4Address.AppendNull()
-				setIPv6(dtm, dt.Message.QueryAddress, sourceIPv6Network, sourceIPv6Host)
-				setIPv6(dtm, dt.Message.QueryAddress, destIPv6Network, destIPv6Host)
-			default:
-				dtm.log.Printf("packet is neither INET or INET6")
-				sourceIPv4Address.AppendNull()
-				destIPv4Address.AppendNull()
-				sourceIPv6Network.AppendNull()
-				sourceIPv6Host.AppendNull()
-				destIPv6Network.AppendNull()
-				destIPv6Host.AppendNull()
-			}
-			sourcePort.Append(uint16(*dt.Message.QueryPort))
-			destPort.Append(uint16(*dt.Message.ResponsePort))
-			dnsProtocol.Append(uint8(*dt.Message.SocketProtocol))
-			if isQuery {
-				responseMessage.AppendNull()
-				queryMessage.Append(dt.Message.QueryMessage)
-			} else {
-				queryMessage.AppendNull()
-				responseMessage.Append(dt.Message.ResponseMessage)
-			}
+			session := newSession(dtm, dt, msg, isQuery, labelLimit, timestamp)
 
-			// Since we have set fields in the arrow data at this
-			// point we have things to write out
-			arrow_updated = true
+			sessions = append(sessions, session)
+
+			// Since we have appended at least one session in the
+			// sessions slice at this point we have things to write
+			// out.
+			session_updated = true
 		case <-ticker.C:
-			if arrow_updated {
-				record := dnsSessionRowBuilder.NewRecord()
+			if session_updated {
 				// We have created a record and therefore the recordbuilder is reset
-				arrow_updated = false
+				session_updated = false
 
-				sessionWriterCh <- record
+				prevSessions := sessions
+
+				sessions = []*sessionData{}
+
+				// We have reset the sessions slice
+				session_updated = false
+
+				fmt.Printf("len(prevSessions): %d, len(sessions): %d\n", len(prevSessions), len(sessions))
+
+				sessionWriterCh <- prevSessions
 			}
 
 			prevWKD, err := wkdTracker.rotateTracker(dawgFile)
@@ -780,16 +722,92 @@ minimiserLoop:
 	close(dtm.done)
 }
 
-func sessionWriter(dtm *dnstapMinimiser, arrowSchema *arrow.Schema, ch chan arrow.Record, dataDir string, wg *sync.WaitGroup) {
+func newSession(dtm *dnstapMinimiser, dt *dnstap.Dnstap, msg *dns.Msg, isQuery bool, labelLimit int, timestamp time.Time) *sessionData {
+	qp := int32(*dt.Message.QueryPort)
+	rp := int32(*dt.Message.ResponsePort)
+
+	sd := &sessionData{
+		SourcePort: &qp,
+		DestPort:   &rp,
+	}
+
+	setSessionLabels(dns.SplitDomainName(msg.Question[0].Name), labelLimit, sd)
+
+	if isQuery {
+		qms := string(dt.Message.QueryMessage)
+		sd.QueryMessage = &qms
+
+		ms := timestamp.UnixMicro()
+		sd.QueryTime = &ms
+	} else {
+		rms := string(dt.Message.ResponseMessage)
+		sd.ResponseMessage = &rms
+
+		ms := timestamp.UnixMicro()
+		sd.ResponseTime = &ms
+	}
+
+	if len(dt.Identity) != 0 {
+		sID := string(dt.Identity)
+		sd.ServerID = &sID
+	}
+
+	switch *dt.Message.SocketFamily {
+	case dnstap.SocketFamily_INET:
+		sourceIPInt, err := ipBytesToInt(dt.Message.QueryAddress)
+		if err != nil {
+			dtm.log.Printf("unable to create uint32 from dt.Message.QueryAddress: %s", err)
+		} else {
+			i32SourceIPInt := int32(sourceIPInt)
+			sd.SourceIPv4 = &i32SourceIPInt
+		}
+
+		destIPInt, err := ipBytesToInt(dt.Message.ResponseAddress)
+		if err != nil {
+			dtm.log.Printf("unable to create uint32 from dt.Message.ResponseAddress: %s", err)
+		} else {
+			i32DestIPInt := int32(destIPInt)
+			sd.DestIPv4 = &i32DestIPInt
+		}
+	case dnstap.SocketFamily_INET6:
+		sourceIPIntNetwork, sourceIPIntHost, err := ip6BytesToInt(dt.Message.QueryAddress)
+		if err != nil {
+			dtm.log.Printf("unable to create uint64 variables from dt.Message.QueryAddress: %s", err)
+		} else {
+			i64SourceIntNetwork := int64(sourceIPIntNetwork)
+			i64SourceIntHost := int64(sourceIPIntHost)
+			sd.SourceIPv6Network = &i64SourceIntNetwork
+			sd.SourceIPv6Host = &i64SourceIntHost
+		}
+
+		dipIntNetwork, dipIntHost, err := ip6BytesToInt(dt.Message.ResponseAddress)
+		if err != nil {
+			dtm.log.Printf("unable to create uint64 variables from dt.Message.ResponseAddress: %s", err)
+		} else {
+			i64dIntNetwork := int64(dipIntNetwork)
+			i64dIntHost := int64(dipIntHost)
+			sd.SourceIPv6Network = &i64dIntNetwork
+			sd.SourceIPv6Host = &i64dIntHost
+		}
+	default:
+		dtm.log.Printf("packet is neither INET or INET6")
+	}
+
+	sd.DNSProtocol = (*int32)(dt.Message.SocketProtocol)
+
+	return sd
+}
+
+func sessionWriter(dtm *dnstapMinimiser, ch chan []*sessionData, dataDir string, wg *sync.WaitGroup) {
 	defer wg.Done()
-	for record := range ch {
-		err := writeSession(dtm, arrowSchema, record, dataDir)
+	for sessions := range ch {
+		err := writeSessionParquet(dtm, sessions, dataDir)
 		if err != nil {
 			dtm.log.Printf(err.Error())
 		}
 	}
 
-	dtm.log.Printf("sessionWriter: exiting loop")
+	dtm.log.Printf("sessionStructWriter: exiting loop")
 }
 
 func histogramWriter(dtm *dnstapMinimiser, ch chan *wellKnownDomainsData, labelLimit int, outboxDir string, wg *sync.WaitGroup) {
@@ -906,62 +924,6 @@ func parsePacket(dt *dnstap.Dnstap, isQuery bool) (*dns.Msg, time.Time) {
 	return msg, t
 }
 
-func setLabels(dtm *dnstapMinimiser, msg *dns.Msg, labelLimit int, labelBuilderSlice []*array.StringBuilder) {
-	labels := dns.SplitDomainName(msg.Question[0].Name)
-
-	// labels is nil if this is the root domain (.)
-	if labels == nil {
-		dtm.log.Printf("setting all labels to null")
-		for _, arrowLabelBuilder := range labelBuilderSlice {
-			arrowLabelBuilder.AppendNull()
-		}
-	} else {
-		reverseLabels := reverseLabelsBounded(labels, labelLimit)
-		for i, label := range reverseLabels {
-			dtm.log.Printf("setting label%d to %s", i, label)
-			labelBuilderSlice[i].Append(label)
-		}
-
-		// Fill out remaining labels with null if needed
-		if len(reverseLabels) < labelLimit {
-			for i := len(reverseLabels); i < labelLimit; i++ {
-				dtm.log.Printf("setting remaining label%d to null\n", i)
-				labelBuilderSlice[i].AppendNull()
-			}
-		}
-	}
-}
-
-func setTimestamp(dtm *dnstapMinimiser, isQuery bool, timestamp time.Time, queryTimeBuilder *array.TimestampBuilder, responseTimeBuilder *array.TimestampBuilder) {
-	if isQuery {
-		responseTimeBuilder.AppendNull()
-		arrowTimeQuery, err := arrow.TimestampFromTime(timestamp, arrow.Nanosecond)
-		if err != nil {
-			dtm.log.Printf("unable to parse query_time: %s, appending null", err)
-			queryTimeBuilder.AppendNull()
-		} else {
-			queryTimeBuilder.Append(arrowTimeQuery)
-		}
-	} else {
-		queryTimeBuilder.AppendNull()
-		arrowTimeResponse, err := arrow.TimestampFromTime(timestamp, arrow.Nanosecond)
-		if err != nil {
-			dtm.log.Printf("unable to parse response_time: %s, appending null", err)
-			responseTimeBuilder.AppendNull()
-		} else {
-			responseTimeBuilder.Append(arrowTimeResponse)
-		}
-	}
-}
-
-func setServerID(dt *dnstap.Dnstap, serverIDBuilder *array.BinaryBuilder) {
-	if len(dt.Identity) == 0 {
-		serverIDBuilder.AppendNull()
-	} else {
-		serverIDBuilder.Append(dt.Identity)
-	}
-}
-
 func ipBytesToInt(ip4Bytes []byte) (uint32, error) {
 	ip, ok := netip.AddrFromSlice(ip4Bytes)
 	if !ok {
@@ -990,32 +952,7 @@ func ip6BytesToInt(ip6Bytes []byte) (uint64, uint64, error) {
 	return ipIntNetwork, ipIntHost, nil
 }
 
-func setIPv4(dtm *dnstapMinimiser, dtIPBytes []byte, arrowIPv4Builder *array.Uint32Builder) {
-	ipInt, err := ipBytesToInt(dtIPBytes)
-	if err != nil {
-		dtm.log.Printf("setIPv4: unable to create uint32 from dnstap address: %s", err)
-		arrowIPv4Builder.AppendNull()
-		return
-	}
-	arrowIPv4Builder.Append(ipInt)
-}
-
-func setIPv6(dtm *dnstapMinimiser, dtIPBytes []byte, arrowIPv6NetworkBuilder *array.Uint64Builder, arrowIPv6HostBuilder *array.Uint64Builder) {
-	ipIntNetwork, ipIntHost, err := ip6BytesToInt(dtIPBytes)
-	if err != nil {
-		dtm.log.Printf("setIPv6: unable to create uint64 variables from dnstap address: %s", err)
-		arrowIPv6NetworkBuilder.AppendNull()
-		arrowIPv6HostBuilder.AppendNull()
-		return
-	}
-
-	arrowIPv6NetworkBuilder.Append(ipIntNetwork)
-	arrowIPv6HostBuilder.Append(ipIntHost)
-}
-
-func writeSession(dtm *dnstapMinimiser, arrowSchema *arrow.Schema, record arrow.Record, dataDir string) error {
-	defer record.Release()
-
+func writeSessionParquet(dtm *dnstapMinimiser, sessions []*sessionData, dataDir string) error {
 	// Write session file to a sessions dir where it will be read by clickhouse
 	sessionsDir := filepath.Join(dataDir, "parquet", "sessions")
 
@@ -1023,9 +960,10 @@ func writeSession(dtm *dnstapMinimiser, arrowSchema *arrow.Schema, record arrow.
 
 	absoluteTmpFileName = filepath.Clean(absoluteTmpFileName) // Make gosec happy
 	dtm.log.Printf("writing out session parquet file %s", absoluteTmpFileName)
+
 	outFile, err := os.Create(absoluteTmpFileName)
 	if err != nil {
-		return fmt.Errorf("writeSession: unable to open session file: %w", err)
+		return fmt.Errorf("writeSessionParquet: unable to open histogram file: %w", err)
 	}
 	fileOpen := true
 	defer func() {
@@ -1034,49 +972,41 @@ func writeSession(dtm *dnstapMinimiser, arrowSchema *arrow.Schema, record arrow.
 		if fileOpen {
 			err := outFile.Close()
 			if err != nil {
-				dtm.log.Printf("writeSession: unable to do deferred close of outFile: %w", err)
+				dtm.log.Printf("writeSessionParquet: unable to do deferred close of histogram outFile: %w", err)
 			}
 		}
 	}()
 
-	parquetWriter, err := pqarrow.NewFileWriter(arrowSchema, outFile, nil, pqarrow.DefaultWriterProps())
+	parquetWriter, err := writer.NewParquetWriterFromWriter(outFile, new(sessionData), 4)
 	if err != nil {
-		return fmt.Errorf("writeSession: unable to create parquet writer: %w", err)
+		return fmt.Errorf("writeSessionParquet: unable to create parquet writer: %w", err)
 	}
-	defer func() {
-		err := parquetWriter.Close()
-		// Closing the parquetWriter automatically closes the underlying file
-		fileOpen = false
+
+	for _, sessionData := range sessions {
+		err = parquetWriter.Write(*sessionData)
 		if err != nil {
-			dtm.log.Printf("writeSession: unable to do deferred close of parquetWriter: %w", err)
+			return fmt.Errorf("writeSessionParquet: unable to call Write() on parquet writer: %w", err)
 		}
-	}()
-
-	err = parquetWriter.Write(record)
-	if err != nil {
-		return fmt.Errorf("writeSession: unable to write parquet file: %w", err)
 	}
 
-	err = parquetWriter.Close()
-	// Closing the parquetWriter automatically closes the underlying file
-	// so lets not try do it again in the deferred func when we return. At
-	// the same time it is documented to be a no-op to call Close() on the
-	// parquetWriter multiple times, so just let that one be called again.
+	err = parquetWriter.WriteStop()
+	if err != nil {
+		return fmt.Errorf("writeSessionParquet: unable to call WriteStop() on parquet writer: %w", err)
+	}
+
+	// We need to close the file before renaming it
+	err = outFile.Close()
+	// at this point we do not want the defer to close the file for us when returning
 	fileOpen = false
 	if err != nil {
-		return fmt.Errorf("writeSession: unable to close parquet file: %w", err)
+		return fmt.Errorf("writeSessionParquet: unable to call WriteStop() on parquet writer: %w", err)
 	}
 
-	jsonBytes, err := record.MarshalJSON()
-	if err != nil {
-		return fmt.Errorf("writeSession: error marshalling json fron rec: %w", err)
-	}
-	fmt.Println(string(jsonBytes))
-
-	dtm.log.Printf("renaming session file '%s' -> '%s'", absoluteTmpFileName, absoluteFileName)
+	// Atomically rename the file to its real name so it can be picked up by the histogram sender
+	dtm.log.Printf("renaming struct session file '%s' -> '%s'", absoluteTmpFileName, absoluteFileName)
 	err = os.Rename(absoluteTmpFileName, absoluteFileName)
 	if err != nil {
-		return fmt.Errorf("writeSession: unable to rename output file: %w", err)
+		return fmt.Errorf("writeSessionParquet: unable to rename output file: %w", err)
 	}
 
 	return nil
