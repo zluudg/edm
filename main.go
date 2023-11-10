@@ -71,8 +71,8 @@ type histogramData struct {
 	// parquet file, and thus do not need to be exported
 	v4ClientHLL           hll.Hll
 	v6ClientHLL           hll.Hll
-	V4ClientCountHLLBytes []byte `parquet:"name=v4client_count, type=MAP, convertedtype=LIST, valuetype=BYTE_ARRAY"`
-	V6ClientCountHLLBytes []byte `parquet:"name=v6client_count, type=MAP, convertedtype=LIST, valuetype=BYTE_ARRAY"`
+	V4ClientCountHLLBytes *string `parquet:"name=v4client_count, type=BYTE_ARRAY"`
+	V6ClientCountHLLBytes *string `parquet:"name=v6client_count, type=BYTE_ARRAY"`
 }
 
 type sessionData struct {
@@ -1073,8 +1073,10 @@ func writeHistogramParquet(dtm *dnstapMinimiser, prevWellKnownDomainsData *wellK
 		dtm.log.Printf("ipv6 cardinality: %d", hGramData.v6ClientHLL.Cardinality())
 
 		// Write out the bytes from our hll data structures
-		hGramData.V4ClientCountHLLBytes = hGramData.v4ClientHLL.ToBytes()
-		hGramData.V6ClientCountHLLBytes = hGramData.v6ClientHLL.ToBytes()
+		v4ClientHLLString := string(hGramData.v4ClientHLL.ToBytes())
+		v6ClientHLLString := string(hGramData.v6ClientHLL.ToBytes())
+		hGramData.V4ClientCountHLLBytes = &v4ClientHLLString
+		hGramData.V6ClientCountHLLBytes = &v6ClientHLLString
 
 		err = parquetWriter.Write(hGramData)
 		if err != nil {
