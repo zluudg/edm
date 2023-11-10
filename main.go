@@ -114,14 +114,14 @@ func readConfig(configFile string) (dtmConfig, error) {
 	return conf, nil
 }
 
-func setHistogramLabels(labels []string, labelLimit int, hd *histogramData) *histogramData {
+func setHistogramLabels(dtm *dnstapMinimiser, labels []string, labelLimit int, hd *histogramData) *histogramData {
 	// If labels is nil (the "." zone) we can depend on the zero type of
 	// the label fields being nil, so nothing to do
 	if labels == nil {
 		return hd
 	}
 
-	reverseLabels := reverseLabelsBounded(labels, labelLimit)
+	reverseLabels := reverseLabelsBounded(dtm, labels, labelLimit)
 
 	s := reflect.ValueOf(hd).Elem()
 
@@ -132,14 +132,14 @@ func setHistogramLabels(labels []string, labelLimit int, hd *histogramData) *his
 	return hd
 }
 
-func setSessionLabels(labels []string, labelLimit int, sd *sessionData) *sessionData {
+func setSessionLabels(dtm *dnstapMinimiser, labels []string, labelLimit int, sd *sessionData) *sessionData {
 	// If labels is nil (the "." zone) we can depend on the zero type of
 	// the label fields being nil, so nothing to do
 	if labels == nil {
 		return sd
 	}
 
-	reverseLabels := reverseLabelsBounded(labels, labelLimit)
+	reverseLabels := reverseLabelsBounded(dtm, labels, labelLimit)
 
 	s := reflect.ValueOf(sd).Elem()
 
@@ -150,7 +150,7 @@ func setSessionLabels(labels []string, labelLimit int, sd *sessionData) *session
 	return sd
 }
 
-func reverseLabelsBounded(labels []string, maxLen int) []string {
+func reverseLabelsBounded(dtm *dnstapMinimiser, labels []string, maxLen int) []string {
 	// If labels is nil (the "." zone) there is nothing to do
 	if labels == nil {
 		return nil
@@ -165,20 +165,26 @@ func reverseLabelsBounded(labels []string, maxLen int) []string {
 
 	// Append all labels except the last one
 	for i := len(labels) - 1; i > remainderElems; i-- {
-		fmt.Printf("appending %s (%d)\n", labels[i], i)
+		if dtm.debug {
+			dtm.log.Printf("appending %s (%d)\n", labels[i], i)
+		}
 		boundedReverseLabels = append(boundedReverseLabels, labels[i])
 	}
 
 	// If the labels fit inside maxLen then just append the last remaining
 	// label as-is
 	if len(labels) <= maxLen {
-		fmt.Printf("appending final label %s (%d)\n", labels[0], 0)
+		if dtm.debug {
+			dtm.log.Printf("appending final label %s (%d)\n", labels[0], 0)
+		}
 		boundedReverseLabels = append(boundedReverseLabels, labels[0])
 	} else {
 		// If there are more labels than maxLen we need to concatenate
 		// them before appending the last element
 		if remainderElems > 0 {
-			fmt.Println("building slices of remainders")
+			if dtm.debug {
+				dtm.log.Printf("building slices of remainders")
+			}
 			remainderLabels := []string{}
 			for i := remainderElems; i >= 0; i-- {
 				remainderLabels = append(remainderLabels, labels[i])
@@ -475,7 +481,6 @@ func (wkd *wellKnownDomainsTracker) isKnown(ipBytes []byte, msg *dns.Msg) bool {
 	// Create hash from IP address for use in HLL data
 	ip, ok := netip.AddrFromSlice(ipBytes)
 	if ok {
-		//fmt.Printf("ip: %s\n", ip.String())
 		wkd.murmur3Hasher.Write(ipBytes) // #nosec G104 -- Write() on hash.Hash never returns an error (https://pkg.go.dev/hash#Hash)
 		if ip.Unmap().Is4() {
 			wkd.m[index].v4ClientHLL.AddRaw(wkd.murmur3Hasher.Sum64())
@@ -615,8 +620,6 @@ minimiserLoop:
 
 			isQuery := strings.HasSuffix(dnstap.Message_Type_name[int32(*dt.Message.Type)], "_QUERY")
 
-			fmt.Printf("%#v\n", dt.Message)
-
 			// For now we only care about response type dnstap packets
 			if isQuery {
 				continue
@@ -691,8 +694,6 @@ minimiserLoop:
 				// We have reset the sessions slice
 				session_updated = false
 
-				fmt.Printf("len(prevSessions): %d, len(sessions): %d\n", len(prevSessions), len(sessions))
-
 				sessionWriterCh <- prevSessions
 			}
 
@@ -731,7 +732,7 @@ func newSession(dtm *dnstapMinimiser, dt *dnstap.Dnstap, msg *dns.Msg, isQuery b
 		DestPort:   &rp,
 	}
 
-	setSessionLabels(dns.SplitDomainName(msg.Question[0].Name), labelLimit, sd)
+	setSessionLabels(dtm, dns.SplitDomainName(msg.Question[0].Name), labelLimit, sd)
 
 	if isQuery {
 		qms := string(dt.Message.QueryMessage)
@@ -1003,7 +1004,7 @@ func writeSessionParquet(dtm *dnstapMinimiser, sessions []*sessionData, dataDir 
 	}
 
 	// Atomically rename the file to its real name so it can be picked up by the histogram sender
-	dtm.log.Printf("renaming struct session file '%s' -> '%s'", absoluteTmpFileName, absoluteFileName)
+	dtm.log.Printf("renaming session file '%s' -> '%s'", absoluteTmpFileName, absoluteFileName)
 	err = os.Rename(absoluteTmpFileName, absoluteFileName)
 	if err != nil {
 		return fmt.Errorf("writeSessionParquet: unable to rename output file: %w", err)
@@ -1062,12 +1063,11 @@ func writeHistogramParquet(dtm *dnstapMinimiser, prevWellKnownDomainsData *wellK
 		if err != nil {
 			return fmt.Errorf("writeHistogramParquet: unable to find DAWG index %d: %w", index, err)
 		}
-		fmt.Printf("%s: %#v\n", domain, *hGramData)
 
 		labels := dns.SplitDomainName(domain)
 
 		// Setting the labels now when we are out of the hot path.
-		setHistogramLabels(labels, labelLimit, hGramData)
+		setHistogramLabels(dtm, labels, labelLimit, hGramData)
 
 		dtm.log.Printf("ipv4 cardinality: %d", hGramData.v4ClientHLL.Cardinality())
 		dtm.log.Printf("ipv6 cardinality: %d", hGramData.v6ClientHLL.Cardinality())
