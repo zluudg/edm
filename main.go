@@ -202,7 +202,12 @@ func main() {
 	// Handle flags
 	debug := flag.Bool("debug", false, "print debug logging during operation")
 	configFile := flag.String("config", "dtm.toml", "config file for sensitive information")
-	inputUnixSocketPath := flag.String("input-unix", "/var/lib/unbound/dnstap.sock", "create unix socket for reading dnstap")
+	inputUnixSocketPath := flag.String("input-unix", "", "create unix socket for reading dnstap (e.g. /var/lib/unbound/dnstap.sock)")
+	inputTCPSocket := flag.String("input-tcp", "", "create TCP socket for reading dnstap (e.g. '127.0.0.1:53535')")
+	inputTLSSocket := flag.String("input-tls", "", "create TLS TCP socket for reading dnstap (e.g. '127.0.0.1:53535')")
+	inputTLSCertFile := flag.String("input-tls-cert-file", "", "file containing cert used for TLS TCP socket")
+	inputTLSKeyFile := flag.String("input-tls-key-file", "", "file containing key used for TLS TCP socket")
+	inputTLSClientCAFile := flag.String("input-tls-client-ca-file", "", "file containing CA used for client cert allowed to connect to TLS TCP socket")
 	cryptoPanKey := flag.String("cryptopan-key", "", "override the secret used for Crypto-PAn pseudonymization")
 	cryptoPanKeySalt := flag.String("cryptopan-key-salt", "dtm-kdf-salt-val", "the salt used for key derivation")
 	dawgFile := flag.String("well-known-domains", "well-known-domains.dawg", "the dawg file used for filtering well-known domains")
@@ -225,6 +230,12 @@ func main() {
 	httpClientCertFile := flag.String("http-client-cert-file", "dtm-http-client.pem", "ECSDSA client cert used for authenticating to aggregate-receiver")
 	httpURLString := flag.String("http-url", "https://127.0.0.1:8443", "Service we will POST aggregates to")
 	flag.Parse()
+
+	// One input must be chosen
+	if *inputUnixSocketPath == "" && *inputTCPSocket == "" && *inputTLSSocket == "" {
+		slog.Error("missing required input flag, one of: -input-unix, -input-tcp or -input-tls")
+		os.Exit(1)
+	}
 
 	conf, err := readConfig(*configFile)
 	if err != nil {
@@ -333,11 +344,62 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Setup the unix socket dnstap.Input
-	dti, err := dnstap.NewFrameStreamSockInputFromPath(*inputUnixSocketPath)
-	if err != nil {
-		slog.Error(err.Error())
-		os.Exit(1)
+	// Setup the dnstap.Input, only one at a time is supported.
+	var dti *dnstap.FrameStreamSockInput
+	if *inputUnixSocketPath != "" {
+		slog.Info("creating dnstap unix socket", "socket", *inputUnixSocketPath)
+		dti, err = dnstap.NewFrameStreamSockInputFromPath(*inputUnixSocketPath)
+		if err != nil {
+			slog.Error(err.Error())
+			os.Exit(1)
+		}
+	} else if *inputTCPSocket != "" {
+		slog.Info("creating plaintext dnstap TCP socket", "socket", *inputTCPSocket)
+		l, err := net.Listen("tcp", *inputTCPSocket)
+		if err != nil {
+			slog.Error(err.Error())
+			os.Exit(1)
+		}
+		dti = dnstap.NewFrameStreamSockInput(l)
+	} else if *inputTLSSocket != "" {
+		if *inputTLSCertFile == "" {
+			slog.Error("missing required -input-tls-cert-file option")
+			os.Exit(1)
+		}
+		if *inputTLSKeyFile == "" {
+			slog.Error("missing required -input-tls-key-file option")
+			os.Exit(1)
+		}
+		slog.Info("creating encrypted dnstap TLS socket", "socket", *inputTLSSocket)
+		dnstapInputCert, err := tls.LoadX509KeyPair(*inputTLSCertFile, *inputTLSKeyFile)
+		if err != nil {
+			slog.Error(fmt.Sprintf("unable to load x509 dnstap listener cert: %s", err))
+			os.Exit(1)
+		}
+		dnstapTLSConfig := &tls.Config{
+			Certificates: []tls.Certificate{dnstapInputCert},
+			MinVersion:   tls.VersionTLS13,
+		}
+
+		// Enable client mTLS (client cert auth) if a CA file was passed:
+		if *inputTLSClientCAFile != "" {
+			slog.Info("dnstap socket requiring valid client certs", "ca-file", *inputTLSClientCAFile)
+			inputTLSClientCACertPool, err := certPoolFromFile(*inputTLSClientCAFile)
+			if err != nil {
+				slog.Error(fmt.Sprintf("failed to create CA cert pool for '-input-tls-client-ca-file': %s", err))
+				os.Exit(1)
+			}
+
+			dnstapTLSConfig.ClientAuth = tls.RequireAndVerifyClientCert
+			dnstapTLSConfig.ClientCAs = inputTLSClientCACertPool
+		}
+
+		l, err := tls.Listen("tcp", *inputTLSSocket, dnstapTLSConfig)
+		if err != nil {
+			slog.Error(err.Error())
+			os.Exit(1)
+		}
+		dti = dnstap.NewFrameStreamSockInput(l)
 	}
 	dti.SetTimeout(time.Second * 5)
 	dti.SetLogger(log.Default())
