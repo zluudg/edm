@@ -724,12 +724,16 @@ minimiserLoop:
 }
 
 func newSession(dtm *dnstapMinimiser, dt *dnstap.Dnstap, msg *dns.Msg, isQuery bool, labelLimit int, timestamp time.Time) *sessionData {
-	qp := int32(*dt.Message.QueryPort)
-	rp := int32(*dt.Message.ResponsePort)
+	sd := &sessionData{}
 
-	sd := &sessionData{
-		SourcePort: &qp,
-		DestPort:   &rp,
+	if dt.Message.QueryPort != nil {
+		qp := int32(*dt.Message.QueryPort)
+		sd.SourcePort = &qp
+	}
+
+	if dt.Message.ResponsePort != nil {
+		rp := int32(*dt.Message.ResponsePort)
+		sd.DestPort = &rp
 	}
 
 	setSessionLabels(dtm, dns.SplitDomainName(msg.Question[0].Name), labelLimit, sd)
@@ -755,40 +759,48 @@ func newSession(dtm *dnstapMinimiser, dt *dnstap.Dnstap, msg *dns.Msg, isQuery b
 
 	switch *dt.Message.SocketFamily {
 	case dnstap.SocketFamily_INET:
-		sourceIPInt, err := ipBytesToInt(dt.Message.QueryAddress)
-		if err != nil {
-			dtm.log.Printf("unable to create uint32 from dt.Message.QueryAddress: %s", err)
-		} else {
-			i32SourceIPInt := int32(sourceIPInt)
-			sd.SourceIPv4 = &i32SourceIPInt
+		if dt.Message.QueryAddress != nil {
+			sourceIPInt, err := ipBytesToInt(dt.Message.QueryAddress)
+			if err != nil {
+				dtm.log.Printf("unable to create uint32 from dt.Message.QueryAddress: %s", err)
+			} else {
+				i32SourceIPInt := int32(sourceIPInt)
+				sd.SourceIPv4 = &i32SourceIPInt
+			}
 		}
 
-		destIPInt, err := ipBytesToInt(dt.Message.ResponseAddress)
-		if err != nil {
-			dtm.log.Printf("unable to create uint32 from dt.Message.ResponseAddress: %s", err)
-		} else {
-			i32DestIPInt := int32(destIPInt)
-			sd.DestIPv4 = &i32DestIPInt
+		if dt.Message.ResponseAddress != nil {
+			destIPInt, err := ipBytesToInt(dt.Message.ResponseAddress)
+			if err != nil {
+				dtm.log.Printf("unable to create uint32 from dt.Message.ResponseAddress: %s", err)
+			} else {
+				i32DestIPInt := int32(destIPInt)
+				sd.DestIPv4 = &i32DestIPInt
+			}
 		}
 	case dnstap.SocketFamily_INET6:
-		sourceIPIntNetwork, sourceIPIntHost, err := ip6BytesToInt(dt.Message.QueryAddress)
-		if err != nil {
-			dtm.log.Printf("unable to create uint64 variables from dt.Message.QueryAddress: %s", err)
-		} else {
-			i64SourceIntNetwork := int64(sourceIPIntNetwork)
-			i64SourceIntHost := int64(sourceIPIntHost)
-			sd.SourceIPv6Network = &i64SourceIntNetwork
-			sd.SourceIPv6Host = &i64SourceIntHost
+		if dt.Message.QueryAddress != nil {
+			sourceIPIntNetwork, sourceIPIntHost, err := ip6BytesToInt(dt.Message.QueryAddress)
+			if err != nil {
+				dtm.log.Printf("unable to create uint64 variables from dt.Message.QueryAddress: %s", err)
+			} else {
+				i64SourceIntNetwork := int64(sourceIPIntNetwork)
+				i64SourceIntHost := int64(sourceIPIntHost)
+				sd.SourceIPv6Network = &i64SourceIntNetwork
+				sd.SourceIPv6Host = &i64SourceIntHost
+			}
 		}
 
-		dipIntNetwork, dipIntHost, err := ip6BytesToInt(dt.Message.ResponseAddress)
-		if err != nil {
-			dtm.log.Printf("unable to create uint64 variables from dt.Message.ResponseAddress: %s", err)
-		} else {
-			i64dIntNetwork := int64(dipIntNetwork)
-			i64dIntHost := int64(dipIntHost)
-			sd.SourceIPv6Network = &i64dIntNetwork
-			sd.SourceIPv6Host = &i64dIntHost
+		if dt.Message.ResponseAddress != nil {
+			dipIntNetwork, dipIntHost, err := ip6BytesToInt(dt.Message.ResponseAddress)
+			if err != nil {
+				dtm.log.Printf("unable to create uint64 variables from dt.Message.ResponseAddress: %s", err)
+			} else {
+				i64dIntNetwork := int64(dipIntNetwork)
+				i64dIntHost := int64(dipIntHost)
+				sd.SourceIPv6Network = &i64dIntNetwork
+				sd.SourceIPv6Host = &i64dIntHost
+			}
 		}
 	default:
 		dtm.log.Printf("packet is neither INET or INET6")
@@ -1143,6 +1155,10 @@ func certPoolFromFile(fileName string) (*x509.CertPool, error) {
 
 // Pseudonymize IP address fields in a dnstap message
 func (dtm *dnstapMinimiser) pseudonymizeDnstap(dt *dnstap.Dnstap) {
-	dt.Message.QueryAddress = dtm.cryptopan.Anonymize(net.IP(dt.Message.QueryAddress))
-	dt.Message.ResponseAddress = dtm.cryptopan.Anonymize(net.IP(dt.Message.ResponseAddress))
+	if dt.Message.QueryAddress != nil {
+		dt.Message.QueryAddress = dtm.cryptopan.Anonymize(net.IP(dt.Message.QueryAddress))
+	}
+	if dt.Message.ResponseAddress != nil {
+		dt.Message.ResponseAddress = dtm.cryptopan.Anonymize(net.IP(dt.Message.ResponseAddress))
+	}
 }
