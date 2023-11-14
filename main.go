@@ -890,7 +890,6 @@ func sessionWriter(dtm *dnstapMinimiser, ch chan []*sessionData, dataDir string,
 func histogramWriter(dtm *dnstapMinimiser, ch chan *wellKnownDomainsData, labelLimit int, outboxDir string, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for prevWellKnownDomainsData := range ch {
-		dtm.log.Printf("in histogramWriter")
 		err := writeHistogramParquet(dtm, prevWellKnownDomainsData, labelLimit, outboxDir)
 		if err != nil {
 			dtm.log.Printf(err.Error())
@@ -1106,8 +1105,6 @@ func buildParquetFilenames(baseDir string, baseName string) (string, string) {
 }
 
 func writeHistogramParquet(dtm *dnstapMinimiser, prevWellKnownDomainsData *wellKnownDomainsData, labelLimit int, outboxDir string) error {
-	dtm.log.Printf("in writeHistogramParquet")
-
 	absoluteTmpFileName, absoluteFileName := buildParquetFilenames(outboxDir, "dns_histogram")
 
 	dtm.log.Printf("writing out histogram file %s", absoluteTmpFileName)
