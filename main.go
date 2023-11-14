@@ -1143,9 +1143,6 @@ func writeHistogramParquet(dtm *dnstapMinimiser, prevWellKnownDomainsData *wellK
 		// Setting the labels now when we are out of the hot path.
 		setHistogramLabels(dtm, labels, labelLimit, hGramData)
 
-		dtm.log.Printf("ipv4 cardinality: %d", hGramData.v4ClientHLL.Cardinality())
-		dtm.log.Printf("ipv6 cardinality: %d", hGramData.v6ClientHLL.Cardinality())
-
 		// Write out the bytes from our hll data structures
 		v4ClientHLLString := string(hGramData.v4ClientHLL.ToBytes())
 		v6ClientHLLString := string(hGramData.v6ClientHLL.ToBytes())
