@@ -709,7 +709,9 @@ minimiserLoop:
 			// We pass on the client address for cardinality
 			// measurements.
 			if wkdTracker.isKnown(dt.Message.QueryAddress, msg) {
-				dtm.log.Printf("skipping well-known domain %s", msg.Question[0].Name)
+				if dtm.debug {
+					dtm.log.Printf("skipping well-known domain %s", msg.Question[0].Name)
+				}
 				continue
 			}
 
