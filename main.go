@@ -619,7 +619,7 @@ func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPu
 	// Labels 0-9
 	labelLimit := 10
 
-	// Keep track of if we have recorded any dnstap packets in arrow data
+	// Keep track of if we have recorded any dnstap packets in session data
 	var session_updated bool
 
 	// Setup channels for feeding writers and data senders that should do
