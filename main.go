@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/tls"
@@ -30,7 +31,7 @@ import (
 	"github.com/BurntSushi/toml"
 	dnstap "github.com/dnstap/golang-dnstap"
 	"github.com/dnstapir/dtm/pkg/protocols"
-	"github.com/eclipse/paho.golang/paho"
+	"github.com/eclipse/paho.golang/autopaho"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/miekg/dns"
 	"github.com/segmentio/go-hll"
@@ -220,7 +221,7 @@ func main() {
 	mqttClientID := flag.String("mqtt-client-id", "dtm-pub", "MQTT client id used for publishing events")
 	mqttCAFile := flag.String("mqtt-ca-file", "", "CA cert used for validating MQTT TLS connection, defaults to using OS CA certs")
 	mqttKeepAlive := flag.Int("mqtt-keepalive", 30, "Keepalive interval fo MQTT connection")
-	mqttCleanStart := flag.Bool("mqtt-clean-start", true, "Control if a new MQTT session is created when connecting")
+	//mqttCleanStart := flag.Bool("mqtt-clean-start", true, "Control if a new MQTT session is created when connecting")
 	qnameSeenEntries := flag.Int("qname-seen-entries", 10000000, "Number of 'seen' qnames stored in LRU cache, need to be changed based on RAM")
 	newQnameBuffer := flag.Int("newqname-buffer", 1000, "Number of slots in new_qname publisher channel, if this is filled up we skip new_qname events")
 	httpCAFile := flag.String("http-ca-file", "", "CA cert used for validating aggregate-receiver connection, defaults to using OS CA certs")
@@ -307,18 +308,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	mqttPub, err := newMQTTPublisher(mqttCACertPool, *mqttServer, *mqttTopic, *mqttClientID, mqttClientCert, mqttSigningKey)
-	if err != nil {
-		slog.Error(fmt.Sprintf("unable to create MQTT publisher: %s", err))
-		os.Exit(1)
-	}
-
-	err = mqttPub.connect(uint16(*mqttKeepAlive), *mqttClientID, *mqttCleanStart)
-	if err != nil {
-		slog.Error(fmt.Sprintf("unable to connect to MQTT server: %s", err))
-		os.Exit(1)
-	}
-
 	// Logger used for the different background workers, logged to stderr
 	// so stdout only includes dnstap data if anything.
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
@@ -343,6 +332,28 @@ func main() {
 		slog.Error(err.Error())
 		os.Exit(1)
 	}
+
+	autopahoConfig, err := newAutoPahoClientConfig(dtm, mqttCACertPool, *mqttServer, *mqttClientID, mqttClientCert, uint16(*mqttKeepAlive))
+	if err != nil {
+		slog.Error(fmt.Sprintf("unable to create autopaho config: %s", err))
+		os.Exit(1)
+	}
+
+	autopahoCtx, autopahoCancel := context.WithCancel(context.Background())
+
+	// Connect to the broker - this will return immediately after initiating the connection process
+	autopahoCm, err := autopaho.NewConnection(autopahoCtx, autopahoConfig)
+	if err != nil {
+		panic(err)
+	}
+
+	var autopahoWg sync.WaitGroup
+
+	// Setup channel for reading messages to publish
+	mqttPubCh := make(chan []byte, 100)
+
+	autopahoWg.Add(1)
+	go runAutoPaho(autopahoCtx, &autopahoWg, autopahoCm, dtm, mqttPubCh, *mqttTopic, mqttSigningKey)
 
 	// Setup the dnstap.Input, only one at a time is supported.
 	var dti *dnstap.FrameStreamSockInput
@@ -436,7 +447,7 @@ func main() {
 	}()
 
 	// Start minimiser
-	go dtm.runMinimiser(*dawgFile, *dataDir, mqttPub, seenQnameLRU, *newQnameBuffer, aggregSender)
+	go dtm.runMinimiser(*dawgFile, *dataDir, mqttPubCh, seenQnameLRU, *newQnameBuffer, aggregSender)
 
 	// Start dnstap.Input
 	go dti.ReadInto(dtm.inputChannel)
@@ -445,15 +456,9 @@ func main() {
 	<-dtm.done
 
 	// Gracefully disconnect from MQTT bus
-	if mqttPub.pahoClient != nil {
-		d := &paho.Disconnect{ReasonCode: 0}
-		err := mqttPub.pahoClient.Disconnect(d)
-		if err != nil {
-			slog.Error(fmt.Sprintf("unable to disconnect from MQTT server: %s", err))
-			os.Exit(1)
-		}
-	}
-
+	close(mqttPubCh)
+	autopahoCancel()
+	autopahoWg.Wait()
 }
 
 type dtmConfig struct {
@@ -606,7 +611,7 @@ func (wkd *wellKnownDomainsTracker) rotateTracker(dawgFile string) (*wellKnownDo
 // runMinimiser reads frames from the inputChannel, doing any modifications and
 // then passes them on to a dnstap.Output. To gracefully stop
 // runMinimiser() you need to close the dtm.stop channel.
-func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPub mqttPublisher, seenQnameLRU *lru.Cache[string, struct{}], newQnameBuffer int, aggSender aggregateSender) {
+func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPubCh chan []byte, seenQnameLRU *lru.Cache[string, struct{}], newQnameBuffer int, aggSender aggregateSender) {
 	dt := &dnstap.Dnstap{}
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -655,7 +660,7 @@ func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPu
 	wg.Add(1)
 	go histogramSender(dtm, histogramSenderCloserCh, outboxDir, sentDir, aggSender, &wg)
 	wg.Add(1)
-	go newQnamePublisher(dtm, newQnamePublisherCh, mqttPub, &wg)
+	go newQnamePublisher(dtm, newQnamePublisherCh, mqttPubCh, &wg)
 
 	dawgFinder, err := dawg.Load(dawgFile)
 	if err != nil {
@@ -941,20 +946,16 @@ timerLoop:
 	dtm.log.Info("histogramSender: exiting loop")
 }
 
-func newQnamePublisher(dtm *dnstapMinimiser, ch chan *protocols.EventsMqttMessageNewQnameJson, mqttPub mqttPublisher, wg *sync.WaitGroup) {
+func newQnamePublisher(dtm *dnstapMinimiser, inputCh chan *protocols.EventsMqttMessageNewQnameJson, mqttPubCh chan []byte, wg *sync.WaitGroup) {
 	defer wg.Done()
-	for newQname := range ch {
+	for newQname := range inputCh {
 		newQnameJSON, err := json.Marshal(newQname)
 		if err != nil {
 			dtm.log.Error("unable to create json for new_qname event", "error", err)
 			continue
 		}
 
-		err = mqttPub.publishMQTT(newQnameJSON)
-		if err != nil {
-			dtm.log.Error("unable to publish new_qname event", "error", err)
-			continue
-		}
+		mqttPubCh <- newQnameJSON
 	}
 	dtm.log.Info("newQnamePublisher: exiting loop")
 }
