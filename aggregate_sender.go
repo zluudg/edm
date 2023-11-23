@@ -108,7 +108,7 @@ func (as aggregateSender) send(fileName string) error {
 	// "Transfer-Encoding: chunked" and remove the Content-Length header.
 	req.ContentLength = fileSize
 
-	as.dtm.log.Printf("aggregateSender.send: sending %s to %s\n", fileName, histogramURL)
+	as.dtm.log.Info("aggregateSender.send", "filename", fileName, "url", histogramURL)
 	startTime := time.Now()
 	res, err := as.signingHttpClient.Do(req)
 	if err != nil {
@@ -127,7 +127,7 @@ func (as aggregateSender) send(fileName string) error {
 	}
 
 	if res.StatusCode != http.StatusCreated {
-		as.dtm.log.Printf(string(bodyData))
+		as.dtm.log.Error(string(bodyData))
 		return fmt.Errorf("sendAggregateFile: unexpected status code: %d", res.StatusCode)
 	}
 
@@ -144,7 +144,7 @@ func (as aggregateSender) send(fileName string) error {
 		locationURL.Host = as.aggrecURL.Host
 	}
 
-	as.dtm.log.Printf("aggregateSender.send: file uploaded, took %s, available at %s", elapsedTime, locationURL)
+	as.dtm.log.Info("aggregateSender.send: file uploaded", "elapsed", elapsedTime.String(), "url", locationURL.String())
 
 	return nil
 }

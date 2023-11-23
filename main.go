@@ -166,7 +166,7 @@ func reverseLabelsBounded(dtm *dnstapMinimiser, labels []string, maxLen int) []s
 	// Append all labels except the last one
 	for i := len(labels) - 1; i > remainderElems; i-- {
 		if dtm.debug {
-			dtm.log.Printf("appending %s (%d)\n", labels[i], i)
+			dtm.log.Debug("reverseLabelsBounded", "label", labels[i], "index", i)
 		}
 		boundedReverseLabels = append(boundedReverseLabels, labels[i])
 	}
@@ -175,7 +175,7 @@ func reverseLabelsBounded(dtm *dnstapMinimiser, labels []string, maxLen int) []s
 	// label as-is
 	if len(labels) <= maxLen {
 		if dtm.debug {
-			dtm.log.Printf("appending final label %s (%d)\n", labels[0], 0)
+			dtm.log.Debug("appending final label", "label", labels[0], "index", 0)
 		}
 		boundedReverseLabels = append(boundedReverseLabels, labels[0])
 	} else {
@@ -183,7 +183,7 @@ func reverseLabelsBounded(dtm *dnstapMinimiser, labels []string, maxLen int) []s
 		// them before appending the last element
 		if remainderElems > 0 {
 			if dtm.debug {
-				dtm.log.Printf("building slices of remainders")
+				dtm.log.Debug("building slices of remainders")
 			}
 			remainderLabels := []string{}
 			for i := remainderElems; i >= 0; i-- {
@@ -338,7 +338,7 @@ func main() {
 	aesKey := argon2.IDKey([]byte(conf.CryptoPanKey), []byte(*cryptoPanKeySalt), 1, 64*1024, 4, aesKeyLen)
 
 	// Create an instance of the minimiser
-	dtm, err := newDnstapMinimiser(log.Default(), aesKey, *debug)
+	dtm, err := newDnstapMinimiser(logger, aesKey, *debug)
 	if err != nil {
 		slog.Error(err.Error())
 		os.Exit(1)
@@ -462,14 +462,14 @@ type dtmConfig struct {
 
 type dnstapMinimiser struct {
 	inputChannel chan []byte          // the channel expected to be passed to dnstap ReadInto()
-	log          dnstap.Logger        // any information logging is sent here
+	log          *slog.Logger         // any information logging is sent here
 	cryptopan    *cryptopan.Cryptopan // used for pseudonymizing IP addresses
 	stop         chan struct{}        // close this channel to gracefully stop runMinimiser()
 	done         chan struct{}        // block on this channel to make sure output is flushed before exiting
 	debug        bool                 // if we should print debug messages during operation
 }
 
-func newDnstapMinimiser(logger dnstap.Logger, cryptoPanKey []byte, debug bool) (*dnstapMinimiser, error) {
+func newDnstapMinimiser(logger *slog.Logger, cryptoPanKey []byte, debug bool) (*dnstapMinimiser, error) {
 	cpn, err := cryptopan.New(cryptoPanKey)
 	if err != nil {
 		return nil, fmt.Errorf("newDnstapMinimiser: %w", err)
@@ -676,7 +676,7 @@ minimiserLoop:
 		select {
 		case frame := <-dtm.inputChannel:
 			if err := proto.Unmarshal(frame, dt); err != nil {
-				dtm.log.Printf("dnstapMinimiser.runMinimiser: proto.Unmarshal() failed: %s, returning", err)
+				dtm.log.Error("dnstapMinimiser.runMinimiser: proto.Unmarshal() failed, returning", "error", err)
 				break minimiserLoop
 			}
 
@@ -688,7 +688,7 @@ minimiserLoop:
 			}
 
 			if dtm.debug {
-				dtm.log.Printf("dnstapMinimiser.runMinimiser: modifying dnstap message")
+				dtm.log.Debug("dnstapMinimiser.runMinimiser: modifying dnstap message")
 			}
 			dtm.pseudonymizeDnstap(dt)
 
@@ -697,12 +697,12 @@ minimiserLoop:
 			// For cases where we were unable to unpack the DNS message we
 			// skip parsing.
 			if msg == nil || len(msg.Question) == 0 {
-				dtm.log.Printf("unable to parse dnstap message, or no question section, skipping parsing")
+				dtm.log.Error("unable to parse dnstap message, or no question section, skipping parsing")
 				continue
 			}
 
 			if _, ok := dns.IsDomainName(msg.Question[0].Name); !ok {
-				dtm.log.Printf("unable to parse question name, skipping parsing")
+				dtm.log.Error("unable to parse question name, skipping parsing")
 				continue
 			}
 
@@ -710,7 +710,7 @@ minimiserLoop:
 			// measurements.
 			if wkdTracker.isKnown(dt.Message.QueryAddress, msg) {
 				if dtm.debug {
-					dtm.log.Printf("skipping well-known domain %s", msg.Question[0].Name)
+					dtm.log.Debug("skipping well-known domain", "domain", msg.Question[0].Name)
 				}
 				continue
 			}
@@ -733,7 +733,7 @@ minimiserLoop:
 				select {
 				case newQnamePublisherCh <- &newQname:
 				default:
-					dtm.log.Printf("new_qname publisher channel is full, skipping event")
+					dtm.log.Error("new_qname publisher channel is full, skipping event")
 				}
 
 			}
@@ -763,7 +763,7 @@ minimiserLoop:
 
 			prevWKD, err := wkdTracker.rotateTracker(dawgFile)
 			if err != nil {
-				dtm.log.Printf("unable to rotate histogram map: %s", err)
+				dtm.log.Error("unable to rotate histogram map", "error", err)
 				continue
 			}
 
@@ -826,7 +826,7 @@ func newSession(dtm *dnstapMinimiser, dt *dnstap.Dnstap, msg *dns.Msg, isQuery b
 		if dt.Message.QueryAddress != nil {
 			sourceIPInt, err := ipBytesToInt(dt.Message.QueryAddress)
 			if err != nil {
-				dtm.log.Printf("unable to create uint32 from dt.Message.QueryAddress: %s", err)
+				dtm.log.Error("unable to create uint32 from dt.Message.QueryAddress", "error", err)
 			} else {
 				i32SourceIPInt := int32(sourceIPInt)
 				sd.SourceIPv4 = &i32SourceIPInt
@@ -836,7 +836,7 @@ func newSession(dtm *dnstapMinimiser, dt *dnstap.Dnstap, msg *dns.Msg, isQuery b
 		if dt.Message.ResponseAddress != nil {
 			destIPInt, err := ipBytesToInt(dt.Message.ResponseAddress)
 			if err != nil {
-				dtm.log.Printf("unable to create uint32 from dt.Message.ResponseAddress: %s", err)
+				dtm.log.Error("unable to create uint32 from dt.Message.ResponseAddress", "error", err)
 			} else {
 				i32DestIPInt := int32(destIPInt)
 				sd.DestIPv4 = &i32DestIPInt
@@ -846,7 +846,7 @@ func newSession(dtm *dnstapMinimiser, dt *dnstap.Dnstap, msg *dns.Msg, isQuery b
 		if dt.Message.QueryAddress != nil {
 			sourceIPIntNetwork, sourceIPIntHost, err := ip6BytesToInt(dt.Message.QueryAddress)
 			if err != nil {
-				dtm.log.Printf("unable to create uint64 variables from dt.Message.QueryAddress: %s", err)
+				dtm.log.Error("unable to create uint64 variables from dt.Message.QueryAddress", "error", err)
 			} else {
 				i64SourceIntNetwork := int64(sourceIPIntNetwork)
 				i64SourceIntHost := int64(sourceIPIntHost)
@@ -858,7 +858,7 @@ func newSession(dtm *dnstapMinimiser, dt *dnstap.Dnstap, msg *dns.Msg, isQuery b
 		if dt.Message.ResponseAddress != nil {
 			dipIntNetwork, dipIntHost, err := ip6BytesToInt(dt.Message.ResponseAddress)
 			if err != nil {
-				dtm.log.Printf("unable to create uint64 variables from dt.Message.ResponseAddress: %s", err)
+				dtm.log.Error("unable to create uint64 variables from dt.Message.ResponseAddress", "error", err)
 			} else {
 				i64dIntNetwork := int64(dipIntNetwork)
 				i64dIntHost := int64(dipIntHost)
@@ -867,7 +867,7 @@ func newSession(dtm *dnstapMinimiser, dt *dnstap.Dnstap, msg *dns.Msg, isQuery b
 			}
 		}
 	default:
-		dtm.log.Printf("packet is neither INET or INET6")
+		dtm.log.Error("packet is neither INET or INET6")
 	}
 
 	sd.DNSProtocol = (*int32)(dt.Message.SocketProtocol)
@@ -880,11 +880,11 @@ func sessionWriter(dtm *dnstapMinimiser, ch chan []*sessionData, dataDir string,
 	for sessions := range ch {
 		err := writeSessionParquet(dtm, sessions, dataDir)
 		if err != nil {
-			dtm.log.Printf(err.Error())
+			dtm.log.Error("sessionWriter", "error", err.Error())
 		}
 	}
 
-	dtm.log.Printf("sessionStructWriter: exiting loop")
+	dtm.log.Info("sessionStructWriter: exiting loop")
 }
 
 func histogramWriter(dtm *dnstapMinimiser, ch chan *wellKnownDomainsData, labelLimit int, outboxDir string, wg *sync.WaitGroup) {
@@ -892,11 +892,11 @@ func histogramWriter(dtm *dnstapMinimiser, ch chan *wellKnownDomainsData, labelL
 	for prevWellKnownDomainsData := range ch {
 		err := writeHistogramParquet(dtm, prevWellKnownDomainsData, labelLimit, outboxDir)
 		if err != nil {
-			dtm.log.Printf(err.Error())
+			dtm.log.Error("histogramWriter", "error", err.Error())
 		}
 
 	}
-	dtm.log.Printf("histogramWriter: exiting loop")
+	dtm.log.Info("histogramWriter: exiting loop")
 }
 
 func histogramSender(dtm *dnstapMinimiser, closerCh chan struct{}, outboxDir string, sentDir string, aggSender aggregateSender, wg *sync.WaitGroup) {
@@ -913,7 +913,7 @@ timerLoop:
 		case <-ticker.C:
 			dirEntries, err := os.ReadDir(outboxDir)
 			if err != nil {
-				dtm.log.Printf("histogramSender: unable to read outbox dir: %w", err)
+				dtm.log.Error("histogramSender: unable to read outbox dir", "error", err)
 				continue
 			}
 			for _, dirEntry := range dirEntries {
@@ -925,11 +925,11 @@ timerLoop:
 					absPathSent := filepath.Join(sentDir, dirEntry.Name())
 					err := aggSender.send(absPath)
 					if err != nil {
-						dtm.log.Printf("histogramSender: unable to send histogram file: %s", err)
+						dtm.log.Error("histogramSender: unable to send histogram file", "error", err)
 					}
 					err = os.Rename(absPath, absPathSent)
 					if err != nil {
-						dtm.log.Printf("histogramSender: unable to rename sent histogram file: %s", err)
+						dtm.log.Error("histogramSender: unable to rename sent histogram file", "error", err)
 					}
 				}
 			}
@@ -938,7 +938,7 @@ timerLoop:
 			break timerLoop
 		}
 	}
-	dtm.log.Printf("histogramSender: exiting loop")
+	dtm.log.Info("histogramSender: exiting loop")
 }
 
 func newQnamePublisher(dtm *dnstapMinimiser, ch chan *protocols.EventsMqttMessageNewQnameJson, mqttPub mqttPublisher, wg *sync.WaitGroup) {
@@ -946,17 +946,17 @@ func newQnamePublisher(dtm *dnstapMinimiser, ch chan *protocols.EventsMqttMessag
 	for newQname := range ch {
 		newQnameJSON, err := json.Marshal(newQname)
 		if err != nil {
-			dtm.log.Printf("unable to create json for new_qname event: %w", err)
+			dtm.log.Error("unable to create json for new_qname event", "error", err)
 			continue
 		}
 
 		err = mqttPub.publishMQTT(newQnameJSON)
 		if err != nil {
-			dtm.log.Printf("unable to publish new_qname event: %w", err)
+			dtm.log.Error("unable to publish new_qname event", "error", err)
 			continue
 		}
 	}
-	dtm.log.Printf("newQnamePublisher: exiting loop")
+	dtm.log.Info("newQnamePublisher: exiting loop")
 }
 
 func parsePacket(dt *dnstap.Dnstap, isQuery bool) (*dns.Msg, time.Time) {
@@ -1035,7 +1035,7 @@ func writeSessionParquet(dtm *dnstapMinimiser, sessions []*sessionData, dataDir 
 	absoluteTmpFileName, absoluteFileName := buildParquetFilenames(sessionsDir, "dns_session_block")
 
 	absoluteTmpFileName = filepath.Clean(absoluteTmpFileName) // Make gosec happy
-	dtm.log.Printf("writing out session parquet file %s", absoluteTmpFileName)
+	dtm.log.Info("writing out session parquet file", "filename", absoluteTmpFileName)
 
 	outFile, err := os.Create(absoluteTmpFileName)
 	if err != nil {
@@ -1048,7 +1048,7 @@ func writeSessionParquet(dtm *dnstapMinimiser, sessions []*sessionData, dataDir 
 		if fileOpen {
 			err := outFile.Close()
 			if err != nil {
-				dtm.log.Printf("writeSessionParquet: unable to do deferred close of histogram outFile: %w", err)
+				dtm.log.Error("writeSessionParquet: unable to do deferred close of histogram outFile", "error", err)
 			}
 		}
 	}()
@@ -1079,7 +1079,7 @@ func writeSessionParquet(dtm *dnstapMinimiser, sessions []*sessionData, dataDir 
 	}
 
 	// Atomically rename the file to its real name so it can be picked up by the histogram sender
-	dtm.log.Printf("renaming session file '%s' -> '%s'", absoluteTmpFileName, absoluteFileName)
+	dtm.log.Info("renaming session file", "from", absoluteTmpFileName, "to", absoluteFileName)
 	err = os.Rename(absoluteTmpFileName, absoluteFileName)
 	if err != nil {
 		return fmt.Errorf("writeSessionParquet: unable to rename output file: %w", err)
@@ -1107,7 +1107,7 @@ func buildParquetFilenames(baseDir string, baseName string) (string, string) {
 func writeHistogramParquet(dtm *dnstapMinimiser, prevWellKnownDomainsData *wellKnownDomainsData, labelLimit int, outboxDir string) error {
 	absoluteTmpFileName, absoluteFileName := buildParquetFilenames(outboxDir, "dns_histogram")
 
-	dtm.log.Printf("writing out histogram file %s", absoluteTmpFileName)
+	dtm.log.Info("writing out histogram file", "filename", absoluteTmpFileName)
 
 	absoluteTmpFileName = filepath.Clean(absoluteTmpFileName)
 	outFile, err := os.Create(absoluteTmpFileName)
@@ -1121,7 +1121,7 @@ func writeHistogramParquet(dtm *dnstapMinimiser, prevWellKnownDomainsData *wellK
 		if fileOpen {
 			err := outFile.Close()
 			if err != nil {
-				dtm.log.Printf("writeHistogramParquet: unable to do deferred close of histogram outFile: %w", err)
+				dtm.log.Error("writeHistogramParquet: unable to do deferred close of histogram outFile", "error", err)
 			}
 		}
 	}()
@@ -1168,7 +1168,7 @@ func writeHistogramParquet(dtm *dnstapMinimiser, prevWellKnownDomainsData *wellK
 	}
 
 	// Atomically rename the file to its real name so it can be picked up by the histogram sender
-	dtm.log.Printf("renaming histogram file '%s' -> '%s'", absoluteTmpFileName, absoluteFileName)
+	dtm.log.Info("renaming histogram file", "from", absoluteTmpFileName, "to", absoluteFileName)
 	err = os.Rename(absoluteTmpFileName, absoluteFileName)
 	if err != nil {
 		return fmt.Errorf("writeHistogramParquet: unable to rename output file: %w", err)
