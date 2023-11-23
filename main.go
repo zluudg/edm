@@ -321,7 +321,7 @@ func main() {
 
 	// Logger used for the different background workers, logged to stderr
 	// so stdout only includes dnstap data if anything.
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	// This makes any calls to the standard "log" package to use slog as
 	// well
