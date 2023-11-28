@@ -753,9 +753,6 @@ minimiserLoop:
 			session_updated = true
 		case <-ticker.C:
 			if session_updated {
-				// We have created a record and therefore the recordbuilder is reset
-				session_updated = false
-
 				prevSessions := sessions
 
 				sessions = []*sessionData{}
