@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -62,7 +63,7 @@ func newAggregateSender(dtm *dnstapMinimiser, aggrecURL *url.URL, signingKeyName
 }
 
 // Send histogram data via signed HTTP message to aggregate-receiver (https://github.com/dnstapir/aggregate-receiver)
-func (as aggregateSender) send(fileName string) error {
+func (as aggregateSender) send(fileName string, ts time.Time, duration time.Duration) error {
 	fileName = filepath.Clean(fileName)
 	file, err := os.Open(fileName)
 	if err != nil {
@@ -107,6 +108,12 @@ func (as aggregateSender) send(fileName string) error {
 	// here as well, otherwise net/http will set the header
 	// "Transfer-Encoding: chunked" and remove the Content-Length header.
 	req.ContentLength = fileSize
+
+	// Expected by aggrec, e.g:
+	// Aggregate-Interval: 2023-11-16T09:24:13.487591+01:00/PT1M
+	minutesFloat := duration.Minutes()
+	minutes := int(math.Round(minutesFloat))
+	req.Header.Add("Aggregate-Interval", fmt.Sprintf("%s/PT%dM", ts.Format(time.RFC3339), minutes))
 
 	as.dtm.log.Info("aggregateSender.send", "filename", fileName, "url", histogramURL)
 	startTime := time.Now()

@@ -45,6 +45,8 @@ import (
 
 // Histogram struct implementing description at https://github.com/dnstapir/datasets/blob/main/HistogramReport.fbs
 type histogramData struct {
+	// The time we started collecting the data contained in the histogram
+	StartTime int64 `parquet:"name=start_time, type=INT64, logicaltype=TIMESTAMP, logicaltype.isadjustedtoutc=true, logicaltype.unit=MICROS"`
 	// label fields must be exported as we set them using reflection,
 	// otherwise: "panic: reflect: reflect.Value.SetString using value obtained using unexported field"
 	// Also store them as pointers so we can signal them being unset as
@@ -105,6 +107,11 @@ type sessionData struct {
 	DNSProtocol       *int32  `parquet:"name=dns_protocol, type=INT32, convertedtype=UINT_8"`
 	QueryMessage      *string `parquet:"name=query_message, type=BYTE_ARRAY"`
 	ResponseMessage   *string `parquet:"name=response_message, type=BYTE_ARRAY"`
+}
+
+type prevSessions struct {
+	sessions     []*sessionData
+	rotationTime time.Time
 }
 
 func readConfig(configFile string) (dtmConfig, error) {
@@ -501,6 +508,7 @@ type wellKnownDomainsData struct {
 	// Store a pointer to histogramCounters so we can assign to it without
 	// "cannot assign to struct field in map" issues
 	m             map[int]*histogramData
+	rotationTime  time.Time
 	dawgFinder    dawg.Finder
 	murmur3Hasher hash.Hash64
 }
@@ -588,7 +596,7 @@ func (wkd *wellKnownDomainsTracker) isKnown(ipBytes []byte, msg *dns.Msg) bool {
 	return true
 }
 
-func (wkd *wellKnownDomainsTracker) rotateTracker(dawgFile string) (*wellKnownDomainsData, error) {
+func (wkd *wellKnownDomainsTracker) rotateTracker(dawgFile string, rotationTime time.Time) (*wellKnownDomainsData, error) {
 
 	dawgFinder, err := dawg.Load(dawgFile)
 	if err != nil {
@@ -605,6 +613,8 @@ func (wkd *wellKnownDomainsTracker) rotateTracker(dawgFile string) (*wellKnownDo
 	wkd.dawgFinder = dawgFinder
 	wkd.mutex.Unlock()
 
+	prevWKD.rotationTime = rotationTime
+
 	return prevWKD, nil
 }
 
@@ -613,8 +623,6 @@ func (wkd *wellKnownDomainsTracker) rotateTracker(dawgFile string) (*wellKnownDo
 // runMinimiser() you need to close the dtm.stop channel.
 func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPubCh chan []byte, seenQnameLRU *lru.Cache[string, struct{}], newQnameBuffer int, aggSender aggregateSender) {
 	dt := &dnstap.Dnstap{}
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
 
 	// Labels 0-9
 	labelLimit := 10
@@ -627,7 +635,7 @@ func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPu
 	// to not block the loop if writing/sending data is slow.
 	// NOTE: Remember to close all of these channels at the end of the
 	// minimiser loop, otherwise the program can hang on shutdown.
-	sessionWriterCh := make(chan []*sessionData, 100)
+	sessionWriterCh := make(chan *prevSessions, 100)
 	histogramWriterCh := make(chan *wellKnownDomainsData, 100)
 	// This channel is only used for stopping the goroutine, so no buffer needed
 	histogramSenderCloserCh := make(chan struct{})
@@ -675,6 +683,9 @@ func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPu
 	}
 
 	sessions := []*sessionData{}
+
+	ticker := time.NewTicker(timeUntilNextMinute())
+	defer ticker.Stop()
 
 minimiserLoop:
 	for {
@@ -751,19 +762,25 @@ minimiserLoop:
 			// sessions slice at this point we have things to write
 			// out.
 			session_updated = true
-		case <-ticker.C:
+		case ts := <-ticker.C:
+			// We want to tick at the start of each minute
+			ticker.Reset(timeUntilNextMinute())
+
 			if session_updated {
-				prevSessions := sessions
+				ps := &prevSessions{
+					sessions:     sessions,
+					rotationTime: ts,
+				}
 
 				sessions = []*sessionData{}
 
 				// We have reset the sessions slice
 				session_updated = false
 
-				sessionWriterCh <- prevSessions
+				sessionWriterCh <- ps
 			}
 
-			prevWKD, err := wkdTracker.rotateTracker(dawgFile)
+			prevWKD, err := wkdTracker.rotateTracker(dawgFile, ts)
 			if err != nil {
 				dtm.log.Error("unable to rotate histogram map", "error", err)
 				continue
@@ -877,10 +894,10 @@ func newSession(dtm *dnstapMinimiser, dt *dnstap.Dnstap, msg *dns.Msg, isQuery b
 	return sd
 }
 
-func sessionWriter(dtm *dnstapMinimiser, ch chan []*sessionData, dataDir string, wg *sync.WaitGroup) {
+func sessionWriter(dtm *dnstapMinimiser, ch chan *prevSessions, dataDir string, wg *sync.WaitGroup) {
 	defer wg.Done()
-	for sessions := range ch {
-		err := writeSessionParquet(dtm, sessions, dataDir)
+	for ps := range ch {
+		err := writeSessionParquet(dtm, ps, dataDir)
 		if err != nil {
 			dtm.log.Error("sessionWriter", "error", err.Error())
 		}
@@ -923,9 +940,17 @@ timerLoop:
 					continue
 				}
 				if strings.HasPrefix(dirEntry.Name(), "dns_histogram-") && strings.HasSuffix(dirEntry.Name(), ".parquet") {
+
+					startTS, stopTS, err := timestampsFromFilename(dirEntry.Name())
+					if err != nil {
+						dtm.log.Error("histogramSender: unable to parse timestamps from histogram filename", "error", err)
+						continue
+					}
+					duration := stopTS.Sub(startTS)
+
 					absPath := filepath.Join(outboxDir, dirEntry.Name())
 					absPathSent := filepath.Join(sentDir, dirEntry.Name())
-					err := aggSender.send(absPath)
+					err = aggSender.send(absPath, startTS, duration)
 					if err != nil {
 						dtm.log.Error("histogramSender: unable to send histogram file", "error", err)
 					}
@@ -941,6 +966,23 @@ timerLoop:
 		}
 	}
 	dtm.log.Info("histogramSender: exiting loop")
+}
+
+func timestampsFromFilename(name string) (time.Time, time.Time, error) {
+	// expected name format: dns_histogram-2023-11-29T13-50-00Z_2023-11-29T13-51-00Z.parquet
+	trimmedName := strings.TrimSuffix(name, ".parquet")
+	nameParts := strings.SplitN(trimmedName, "-", 2)
+	times := strings.Split(nameParts[1], "_")
+	startTime, err := time.Parse("2006-01-02T15-04-05Z07:00", times[0])
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("timestampFromFilename: unable to parse startTime: %w", err)
+	}
+	stopTime, err := time.Parse("2006-01-02T15-04-05Z07:00", times[1])
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("timestampFromFilename: unable to parse stopTime: %w", err)
+	}
+
+	return startTime, stopTime, nil
 }
 
 func newQnamePublisher(dtm *dnstapMinimiser, inputCh chan *protocols.EventsMqttMessageNewQnameJson, mqttPubCh chan []byte, wg *sync.WaitGroup) {
@@ -1026,11 +1068,13 @@ func ip6BytesToInt(ip6Bytes []byte) (uint64, uint64, error) {
 	return ipIntNetwork, ipIntHost, nil
 }
 
-func writeSessionParquet(dtm *dnstapMinimiser, sessions []*sessionData, dataDir string) error {
+func writeSessionParquet(dtm *dnstapMinimiser, ps *prevSessions, dataDir string) error {
 	// Write session file to a sessions dir where it will be read by clickhouse
 	sessionsDir := filepath.Join(dataDir, "parquet", "sessions")
 
-	absoluteTmpFileName, absoluteFileName := buildParquetFilenames(sessionsDir, "dns_session_block")
+	startTime := getStartTimeFromRotationTime(ps.rotationTime)
+
+	absoluteTmpFileName, absoluteFileName := buildParquetFilenames(sessionsDir, "dns_session_block", startTime, ps.rotationTime)
 
 	absoluteTmpFileName = filepath.Clean(absoluteTmpFileName) // Make gosec happy
 	dtm.log.Info("writing out session parquet file", "filename", absoluteTmpFileName)
@@ -1056,7 +1100,7 @@ func writeSessionParquet(dtm *dnstapMinimiser, sessions []*sessionData, dataDir 
 		return fmt.Errorf("writeSessionParquet: unable to create parquet writer: %w", err)
 	}
 
-	for _, sessionData := range sessions {
+	for _, sessionData := range ps.sessions {
 		err = parquetWriter.Write(*sessionData)
 		if err != nil {
 			return fmt.Errorf("writeSessionParquet: unable to call Write() on parquet writer: %w", err)
@@ -1086,11 +1130,12 @@ func writeSessionParquet(dtm *dnstapMinimiser, sessions []*sessionData, dataDir 
 	return nil
 }
 
-func buildParquetFilenames(baseDir string, baseName string) (string, string) {
+func buildParquetFilenames(baseDir string, baseName string, timeStart time.Time, timeStop time.Time) (string, string) {
 	// Use timestamp for files, replace ":" with "-" to not have to escape
 	// characters in the shell, e.g: 2009-11-10T23-00-00Z
-	datetime := strings.ReplaceAll(time.Now().UTC().Format(time.RFC3339), ":", "-")
-	fileName := baseName + "-" + datetime + ".parquet"
+	startTS := timestampToFileString(timeStart.UTC())
+	stopTS := timestampToFileString(timeStop.UTC())
+	fileName := fmt.Sprintf("%s-%s_%s.parquet", baseName, startTS, stopTS)
 
 	// Write output to a .tmp file so we can atomically rename it to the real
 	// name when the file has been written in full
@@ -1102,8 +1147,29 @@ func buildParquetFilenames(baseDir string, baseName string) (string, string) {
 	return absoluteTmpFileName, absoluteFileName
 }
 
+func timestampToFileString(ts time.Time) string {
+	// Use timestamp for files, replace ":" with "-" to not have to escape
+	// characters in the shell, e.g: 2009-11-10T23-00-00Z
+	timeString := strings.ReplaceAll(ts.Format(time.RFC3339), ":", "-")
+
+	return timeString
+}
+
+func getStartTimeFromRotationTime(rotationTime time.Time) time.Time {
+	// The ticker used to interrupt minimiserLoop is hardcoded to tick at
+	// the start of every minute so we can assume the duration we have
+	// captured dnstap packets for is 1 minute which should be always true
+	// except for the very first collection at startup based on what
+	// second the program started, but in that case we just pretend we have
+	// the full minute.
+	return rotationTime.Add(-time.Second * 60)
+}
+
 func writeHistogramParquet(dtm *dnstapMinimiser, prevWellKnownDomainsData *wellKnownDomainsData, labelLimit int, outboxDir string) error {
-	absoluteTmpFileName, absoluteFileName := buildParquetFilenames(outboxDir, "dns_histogram")
+
+	startTime := getStartTimeFromRotationTime(prevWellKnownDomainsData.rotationTime)
+
+	absoluteTmpFileName, absoluteFileName := buildParquetFilenames(outboxDir, "dns_histogram", startTime, prevWellKnownDomainsData.rotationTime)
 
 	dtm.log.Info("writing out histogram file", "filename", absoluteTmpFileName)
 
@@ -1129,6 +1195,7 @@ func writeHistogramParquet(dtm *dnstapMinimiser, prevWellKnownDomainsData *wellK
 		return fmt.Errorf("writeHistogramParquet: unable to create parquet writer: %w", err)
 	}
 
+	startTimeMicro := startTime.UnixMicro()
 	for index, hGramData := range prevWellKnownDomainsData.m {
 		domain, err := prevWellKnownDomainsData.dawgFinder.AtIndex(index)
 		if err != nil {
@@ -1139,6 +1206,7 @@ func writeHistogramParquet(dtm *dnstapMinimiser, prevWellKnownDomainsData *wellK
 
 		// Setting the labels now when we are out of the hot path.
 		setHistogramLabels(dtm, labels, labelLimit, hGramData)
+		hGramData.StartTime = startTimeMicro
 
 		// Write out the bytes from our hll data structures
 		v4ClientHLLString := string(hGramData.v4ClientHLL.ToBytes())
@@ -1217,4 +1285,8 @@ func (dtm *dnstapMinimiser) pseudonymizeDnstap(dt *dnstap.Dnstap) {
 	if dt.Message.ResponseAddress != nil {
 		dt.Message.ResponseAddress = dtm.cryptopan.Anonymize(net.IP(dt.Message.ResponseAddress))
 	}
+}
+
+func timeUntilNextMinute() time.Duration {
+	return time.Second * time.Duration(60-time.Now().Second())
 }
