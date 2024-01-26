@@ -302,7 +302,7 @@ func main() {
 
 	if *httpCAFile != "" {
 		// Setup CA cert for validating the aggregate-receiver connection
-		httpCACertPool, err = certPoolFromFile(*mqttCAFile)
+		httpCACertPool, err = certPoolFromFile(*httpCAFile)
 		if err != nil {
 			slog.Error(fmt.Sprintf("failed to create CA cert pool for '-http-ca-file': %s", err))
 			os.Exit(1)
