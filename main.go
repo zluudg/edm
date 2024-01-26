@@ -248,18 +248,18 @@ func main() {
 
 	// One input must be chosen
 	if *inputUnixSocketPath == "" && *inputTCPSocket == "" && *inputTLSSocket == "" {
-		logger.Error("missing required input flag, one of: -input-unix, -input-tcp or -input-tls")
+		logger.Error("missing flag", "err", "missing input, must be one of: -input-unix, -input-tcp or -input-tls")
 		os.Exit(1)
 	}
 
 	conf, err := readConfig(*configFile)
 	if err != nil {
-		logger.Error(err.Error())
+		logger.Error("unable to read config", "err", err)
 		os.Exit(1)
 	}
 
 	if conf.CryptoPanKey == "" {
-		logger.Error(fmt.Sprintf("missing required setting 'cryptopan-key' in %s", *configFile))
+		logger.Error("cryptopan setup error", "err", "missing required setting 'cryptopan-key' in config", "configfile", *configFile)
 		os.Exit(1)
 	}
 
@@ -271,19 +271,19 @@ func main() {
 
 	httpURL, err := url.Parse(*httpURLString)
 	if err != nil {
-		logger.Error(fmt.Sprintf("unable to parse 'aggrec-url' setting: %s", err))
+		logger.Error("unable to parse 'aggrec-url' setting", "err", err)
 		os.Exit(1)
 	}
 
 	mqttSigningKey, err := ecdsaPrivateKeyFromFile(*mqttSigningKeyFile)
 	if err != nil {
-		logger.Error(fmt.Sprintf("unable to parse key material from 'mqtt-signing-key-file': %s", err))
+		logger.Error("unable to parse key material from 'mqtt-signing-key-file'", "err", err)
 		os.Exit(1)
 	}
 
 	httpSigningKey, err := ecdsaPrivateKeyFromFile(*httpSigningKeyFile)
 	if err != nil {
-		logger.Error(fmt.Sprintf("unable to parse key material from 'http-signing-key-file': %s", err))
+		logger.Error("unable to parse key material from 'http-signing-key-file'", "err", err)
 		os.Exit(1)
 	}
 
@@ -295,7 +295,7 @@ func main() {
 		// Setup CA cert for validating the MQTT connection
 		mqttCACertPool, err = certPoolFromFile(*mqttCAFile)
 		if err != nil {
-			logger.Error(fmt.Sprintf("failed to create CA cert pool for '-mqtt-ca-file': %s", err))
+			logger.Error("failed to create CA cert pool for '-mqtt-ca-file'", "err", err)
 			os.Exit(1)
 		}
 	}
@@ -303,7 +303,7 @@ func main() {
 	// Setup client cert/key for mTLS authentication
 	mqttClientCert, err := tls.LoadX509KeyPair(*mqttClientCertFile, *mqttClientKeyFile)
 	if err != nil {
-		logger.Error(fmt.Sprintf("unable to load x509 mqtt client cert: %s", err))
+		logger.Error("unable to load x509 mqtt client cert", "err", err)
 		os.Exit(1)
 	}
 
@@ -311,14 +311,14 @@ func main() {
 		// Setup CA cert for validating the aggregate-receiver connection
 		httpCACertPool, err = certPoolFromFile(*httpCAFile)
 		if err != nil {
-			logger.Error(fmt.Sprintf("failed to create CA cert pool for '-http-ca-file': %s", err))
+			logger.Error("failed to create CA cert pool for '-http-ca-file'", "err", err)
 			os.Exit(1)
 		}
 	}
 
 	httpClientCert, err := tls.LoadX509KeyPair(*httpClientCertFile, *httpClientKeyFile)
 	if err != nil {
-		logger.Error(fmt.Sprintf("unable to load x509 HTTP client cert: %s", err))
+		logger.Error("unable to load x509 HTTP client cert", "err", err)
 		os.Exit(1)
 	}
 
@@ -335,13 +335,13 @@ func main() {
 	// Create an instance of the minimiser
 	dtm, err := newDnstapMinimiser(logger, aesKey, *debug)
 	if err != nil {
-		logger.Error(err.Error())
+		logger.Error("unable to init dtm", "err", err)
 		os.Exit(1)
 	}
 
 	autopahoConfig, err := newAutoPahoClientConfig(dtm, mqttCACertPool, *mqttServer, *mqttClientID, mqttClientCert, uint16(*mqttKeepAlive))
 	if err != nil {
-		logger.Error(fmt.Sprintf("unable to create autopaho config: %s", err))
+		logger.Error("unable to create autopaho config", "err", err)
 		os.Exit(1)
 	}
 
@@ -367,30 +367,30 @@ func main() {
 		logger.Info("creating dnstap unix socket", "socket", *inputUnixSocketPath)
 		dti, err = dnstap.NewFrameStreamSockInputFromPath(*inputUnixSocketPath)
 		if err != nil {
-			logger.Error(err.Error())
+			logger.Error("unable to create dnstap unix socket", "err", err)
 			os.Exit(1)
 		}
 	} else if *inputTCPSocket != "" {
 		logger.Info("creating plaintext dnstap TCP socket", "socket", *inputTCPSocket)
 		l, err := net.Listen("tcp", *inputTCPSocket)
 		if err != nil {
-			logger.Error(err.Error())
+			logger.Error("unable to create plaintext dnstap TCP socket", "err", err)
 			os.Exit(1)
 		}
 		dti = dnstap.NewFrameStreamSockInput(l)
 	} else if *inputTLSSocket != "" {
 		if *inputTLSCertFile == "" {
-			logger.Error("missing required -input-tls-cert-file option")
+			logger.Error("missing flag", "err", "missing required -input-tls-cert-file option")
 			os.Exit(1)
 		}
 		if *inputTLSKeyFile == "" {
-			logger.Error("missing required -input-tls-key-file option")
+			logger.Error("missing flag", "err", "missing required -input-tls-key-file option")
 			os.Exit(1)
 		}
 		logger.Info("creating encrypted dnstap TLS socket", "socket", *inputTLSSocket)
 		dnstapInputCert, err := tls.LoadX509KeyPair(*inputTLSCertFile, *inputTLSKeyFile)
 		if err != nil {
-			logger.Error(fmt.Sprintf("unable to load x509 dnstap listener cert: %s", err))
+			logger.Error("unable to load x509 dnstap listener cert", "err", err)
 			os.Exit(1)
 		}
 		dnstapTLSConfig := &tls.Config{
@@ -403,7 +403,7 @@ func main() {
 			logger.Info("dnstap socket requiring valid client certs", "ca-file", *inputTLSClientCAFile)
 			inputTLSClientCACertPool, err := certPoolFromFile(*inputTLSClientCAFile)
 			if err != nil {
-				logger.Error(fmt.Sprintf("failed to create CA cert pool for '-input-tls-client-ca-file': %s", err))
+				logger.Error("failed to create CA cert pool for '-input-tls-client-ca-file': %s", "err", err)
 				os.Exit(1)
 			}
 
@@ -413,7 +413,7 @@ func main() {
 
 		l, err := tls.Listen("tcp", *inputTLSSocket, dnstapTLSConfig)
 		if err != nil {
-			logger.Error(err.Error())
+			logger.Error("unable to create TCP listener", "err", err)
 			os.Exit(1)
 		}
 		dti = dnstap.NewFrameStreamSockInput(l)
@@ -429,7 +429,7 @@ func main() {
 		SparseEnabled:     true,
 	})
 	if err != nil {
-		logger.Error(err.Error())
+		logger.Error("unable to set HLL defaults", "err", err)
 		os.Exit(1)
 	}
 
