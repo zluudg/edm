@@ -16,6 +16,8 @@ import (
 	"log/slog"
 	"math/big"
 	"net"
+	"net/http"
+	_ "net/http/pprof" // #nosec G108 -- metricsServer only listens to localhost
 	"net/netip"
 	"net/url"
 	"os"
@@ -34,6 +36,9 @@ import (
 	"github.com/eclipse/paho.golang/autopaho"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/miekg/dns"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/segmentio/go-hll"
 	"github.com/smhanov/dawg"
 	"github.com/spaolacci/murmur3"
@@ -452,6 +457,16 @@ func main() {
 		close(dtm.stop)
 	}()
 
+	metricsServer := &http.Server{
+		Addr:           "127.0.0.1:2112",
+		ReadTimeout:    10 * time.Second,
+		WriteTimeout:   10 * time.Second,
+		MaxHeaderBytes: 1 << 20,
+	}
+
+	http.Handle("/metrics", promhttp.Handler())
+	go metricsServer.ListenAndServe()
+
 	// Start minimiser
 	go dtm.runMinimiser(*dawgFile, *dataDir, mqttPubCh, seenQnameLRU, *newQnameBuffer, aggregSender)
 
@@ -621,6 +636,12 @@ func (wkd *wellKnownDomainsTracker) rotateTracker(dawgFile string, rotationTime 
 // then passes them on to a dnstap.Output. To gracefully stop
 // runMinimiser() you need to close the dtm.stop channel.
 func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPubCh chan []byte, seenQnameLRU *lru.Cache[string, struct{}], newQnameBuffer int, aggSender aggregateSender) {
+
+	dnstapProcessed := promauto.NewCounter(prometheus.CounterOpts{
+		Name: "dtm_processed_dnstap_total",
+		Help: "The total number of processed dnstap packets",
+	})
+
 	dt := &dnstap.Dnstap{}
 
 	// Labels 0-9
@@ -669,6 +690,8 @@ func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPu
 	wg.Add(1)
 	go newQnamePublisher(dtm, newQnamePublisherCh, mqttPubCh, &wg)
 
+	go monitorChannelLen(newQnamePublisherCh)
+
 	dawgFinder, err := dawg.Load(dawgFile)
 	if err != nil {
 		dtm.log.Error(err.Error())
@@ -690,6 +713,7 @@ minimiserLoop:
 	for {
 		select {
 		case frame := <-dtm.inputChannel:
+			dnstapProcessed.Inc()
 			if err := proto.Unmarshal(frame, dt); err != nil {
 				dtm.log.Error("dnstapMinimiser.runMinimiser: proto.Unmarshal() failed, returning", "error", err)
 				break minimiserLoop
@@ -803,6 +827,18 @@ minimiserLoop:
 	}
 	// Signal main() that we are done and ready to exit
 	close(dtm.done)
+}
+
+func monitorChannelLen(newQnamePublisherCh chan *protocols.EventsMqttMessageNewQnameJson) {
+	newQnameChannelLen := promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "dtm_new_qname_ch_len",
+		Help: "The number of new_qname events in the channel buffer",
+	})
+
+	for {
+		newQnameChannelLen.Set(float64(len(newQnamePublisherCh)))
+		time.Sleep(time.Second * 1)
+	}
 }
 
 func newSession(dtm *dnstapMinimiser, dt *dnstap.Dnstap, msg *dns.Msg, isQuery bool, labelLimit int, timestamp time.Time) *sessionData {
