@@ -460,7 +460,7 @@ func main() {
 	metricsServer := &http.Server{
 		Addr:           "127.0.0.1:2112",
 		ReadTimeout:    10 * time.Second,
-		WriteTimeout:   10 * time.Second,
+		WriteTimeout:   31 * time.Second,
 		MaxHeaderBytes: 1 << 20,
 	}
 
