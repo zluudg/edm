@@ -642,6 +642,16 @@ func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPu
 		Help: "The total number of processed dnstap packets",
 	})
 
+	newQnameQueued := promauto.NewCounter(prometheus.CounterOpts{
+		Name: "dtm_new_qname_queued_total",
+		Help: "The total number of queued new_qname events",
+	})
+
+	newQnameDiscarded := promauto.NewCounter(prometheus.CounterOpts{
+		Name: "dtm_new_qname_discarded_total",
+		Help: "The total number of discarded new_qname events",
+	})
+
 	dt := &dnstap.Dnstap{}
 
 	// Labels 0-9
@@ -771,7 +781,9 @@ minimiserLoop:
 				// If the queue is full we skip sending new_qname events on the bus
 				select {
 				case newQnamePublisherCh <- &newQname:
+					newQnameQueued.Inc()
 				default:
+					newQnameDiscarded.Inc()
 					dtm.log.Error("new_qname publisher channel is full, skipping event")
 				}
 
