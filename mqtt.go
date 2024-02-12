@@ -12,6 +12,7 @@ import (
 
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
+	"github.com/eclipse/paho.golang/paho/log"
 	"github.com/lestrrat-go/jwx/v2/jwa"
 	"github.com/lestrrat-go/jwx/v2/jws"
 )
@@ -33,7 +34,7 @@ func newAutoPahoClientConfig(dtm *dnstapMinimiser, caCertPool *x509.CertPool, se
 		KeepAlive:      mqttKeepAlive,
 		OnConnectionUp: func(*autopaho.ConnectionManager, *paho.Connack) { dtm.log.Info("mqtt connection up") },
 		OnConnectError: func(err error) { dtm.log.Error("error whilst attempting connection", "error", err) },
-		Debug:          paho.NOOPLogger{},
+		Debug:          log.NOOPLogger{},
 		ClientConfig: paho.ClientConfig{
 			ClientID:      clientID,
 			OnClientError: func(err error) { dtm.log.Error("server requested disconnect", "error", err) },
