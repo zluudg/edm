@@ -783,8 +783,8 @@ minimiserLoop:
 				case newQnamePublisherCh <- &newQname:
 					newQnameQueued.Inc()
 				default:
+					// If the publisher channel is full we skip creating an event.
 					newQnameDiscarded.Inc()
-					dtm.log.Error("new_qname publisher channel is full, skipping event")
 				}
 
 			}
