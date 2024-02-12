@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/url"
 	"sync"
-	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
@@ -92,10 +91,10 @@ func runAutoPaho(ctx context.Context, wg *sync.WaitGroup, cm *autopaho.Connectio
 		}(signedMsg)
 
 		select {
-		case <-time.After(time.Millisecond * 100):
 		case <-ctx.Done():
 			dtm.log.Info("publisher done")
 			return
+		default:
 		}
 	}
 }
