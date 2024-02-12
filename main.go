@@ -468,7 +468,10 @@ func main() {
 	}
 
 	http.Handle("/metrics", promhttp.Handler())
-	go metricsServer.ListenAndServe()
+	go func() {
+		err := metricsServer.ListenAndServe()
+		logger.Error("metricsServer failed", "error", err)
+	}()
 
 	// Start minimiser
 	go dtm.runMinimiser(*dawgFile, *dataDir, mqttPubCh, seenQnameLRU, *newQnameBuffer, aggregSender)
