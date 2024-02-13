@@ -3,7 +3,6 @@ module github.com/dnstapir/dtm
 go 1.21.4
 
 require (
-	github.com/BurntSushi/toml v1.3.2
 	github.com/dnstap/golang-dnstap v0.4.0
 	github.com/eclipse/paho.golang v0.20.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7
@@ -13,6 +12,8 @@ require (
 	github.com/segmentio/go-hll v1.0.1
 	github.com/smhanov/dawg v0.0.0-20220118194912-66057bdbf2e3
 	github.com/spaolacci/murmur3 v1.1.0
+	github.com/spf13/cobra v1.8.0
+	github.com/spf13/viper v1.18.2
 	github.com/xitongsys/parquet-go v1.6.2
 	github.com/yaronf/httpsign v0.1.16
 	github.com/yawning/cryptopan v0.0.0-20170504040949-65bca51288fe
@@ -55,9 +56,7 @@ require (
 	github.com/sourcegraph/conc v0.3.0 // indirect
 	github.com/spf13/afero v1.11.0 // indirect
 	github.com/spf13/cast v1.6.0 // indirect
-	github.com/spf13/cobra v1.8.0 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
-	github.com/spf13/viper v1.18.2 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/xitongsys/parquet-go-source v0.0.0-20240122235623-d6294584ab18 // indirect
 	go.uber.org/atomic v1.9.0 // indirect
