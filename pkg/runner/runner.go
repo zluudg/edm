@@ -40,7 +40,6 @@ import (
 	"github.com/segmentio/go-hll"
 	"github.com/smhanov/dawg"
 	"github.com/spaolacci/murmur3"
-	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"github.com/xitongsys/parquet-go/writer"
 	"github.com/yawning/cryptopan"
@@ -205,7 +204,7 @@ func reverseLabelsBounded(dtm *dnstapMinimiser, labels []string, maxLen int) []s
 	return boundedReverseLabels
 }
 
-func Run(cmd *cobra.Command) {
+func Run() {
 
 	// Logger used for all output
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))

@@ -13,7 +13,7 @@ var runCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Run dtm in dnstap capture mode",
 	Run: func(cmd *cobra.Command, args []string) {
-		runner.Run(cmd)
+		runner.Run()
 	},
 }
 
