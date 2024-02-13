@@ -218,9 +218,9 @@ func Run() {
 		os.Exit(1)
 	}
 
-	httpURL, err := url.Parse(viper.GetString("port"))
+	httpURL, err := url.Parse(viper.GetString("http-url"))
 	if err != nil {
-		logger.Error("unable to parse 'aggrec-url' setting", "error", err)
+		logger.Error("unable to parse 'http-url' setting", "error", err)
 		os.Exit(1)
 	}
 
