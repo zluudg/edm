@@ -87,7 +87,9 @@ func runAutoPaho(ctx context.Context, wg *sync.WaitGroup, cm *autopaho.Connectio
 				// pr is only non-nil for QoS 1 and up
 				dtm.log.Info("reason code received", "reason_code", pr.ReasonCode)
 			}
-			dtm.log.Info("sent message", "content", string(msg))
+			if dtm.debug {
+				dtm.log.Info("sent message", "content", string(msg))
+			}
 		}(signedMsg)
 
 		select {
