@@ -328,14 +328,6 @@ func Run() {
 		}
 		dti = dnstap.NewFrameStreamSockInput(l)
 	} else if viper.GetString("input-tls") != "" {
-		if viper.GetString("input-tls-cert-file") == "" {
-			logger.Error("missing flag", "error", "missing required --input-tls-cert-file option")
-			os.Exit(1)
-		}
-		if viper.GetString("input-tls-key-file") == "" {
-			logger.Error("missing flag", "error", "missing required --input-tls-key-file option")
-			os.Exit(1)
-		}
 		logger.Info("creating encrypted dnstap TLS socket", "socket", viper.GetString("input-tls"))
 		dnstapInputCert, err := tls.LoadX509KeyPair(viper.GetString("input-tls-cert-file"), viper.GetString("input-tls-key-file"))
 		if err != nil {

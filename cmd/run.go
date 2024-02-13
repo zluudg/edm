@@ -39,6 +39,8 @@ func init() {
 
 	runCmd.Flags().String("input-tls-cert-file", "", "file containing cert used for TLS TCP socket")
 	runCmd.Flags().String("input-tls-key-file", "", "file containing key used for TLS TCP socket")
+	runCmd.MarkFlagsRequiredTogether("input-tls", "input-tls-cert-file", "input-tls-key-file")
+
 	runCmd.Flags().String("input-tls-client-ca-file", "", "file containing CA used for client cert allowed to connect to TLS TCP socket")
 
 	runCmd.Flags().String("cryptopan-key", "", "override the secret used for Crypto-PAn pseudonymization")
