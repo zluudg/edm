@@ -9,39 +9,19 @@ Requires a DAWG file for keeping track of well-known domains. Such a file can
 be created using the tool available in
 https://github.com/dnstapir/dtm-dawg-maker
 ```
-Usage of dtm:
-  -config string
-    	config file for sensitive information (default "dtm.toml")
-  -cryptopan-key string
-    	override the secret used for Crypto-PAn pseudonymization
-  -cryptopan-key-salt string
-    	the salt used for key derivation (default "dtm-kdf-salt-val")
-  -data-dir string
-    	directory where output data is written (default "/var/lib/dtm")
-  -debug
-    	print debug logging during operation
-  -input-unix string
-    	create unix socket for reading dnstap (default "/var/lib/unbound/dnstap.sock")
-  -mqtt-ca string
-    	CA cert used for validating MQTT TLS connection (default "mqtt-ca.crt")
-  -mqtt-clean-start
-    	Control if a new MQTT session is created when connecting (default true)
-  -mqtt-client-cert-file string
-    	ECSDSA client cert used for authenticating to MQTT bus (default "dtm-mqtt-client.pem")
-  -mqtt-client-id string
-    	MQTT client id used for publishing events (default "dtm-pub")
-  -mqtt-client-key-file string
-    	ECSDSA client key used for authenticating to MQTT bus (default "dtm-mqtt-client-key.pem")
-  -mqtt-keepalive int
-    	Keepalive interval fo MQTT connection (default 30)
-  -mqtt-server string
-    	MQTT server we will publish events to (default "127.0.0.1:8883")
-  -mqtt-signing-key-file string
-    	ECSDSA key used for signing MQTT messages (default "dtm-mqtt-signer-key.pem")
-  -mqtt-topic string
-    	MQTT topic to publish events to (default "events/up/dtm/new_qname")
-  -well-known-domains string
-    	the dawg file used for filtering well-known domains (default "well-known-domains.dawg")
+Usage:
+  dtm [command]
+
+Available Commands:
+  completion  Generate the autocompletion script for the specified shell
+  help        Help about any command
+  run         Run dtm in dnstap capture mode
+
+Flags:
+      --config string   config file for sensitive information (default is $HOME/.dtm.yaml)
+  -h, --help            help for dtm
+
+Use "dtm [command] --help" for more information about a command.
 ```
 
 ## Usage
@@ -54,7 +34,7 @@ Basic usage, writing output files to a directory structure under `/var/lib/dtm`
 ```
 echo 'cryptopan-key = "mysecret"' > dtm.toml
 dtm-dawg-maker
-dtm -input-unix /opt/unbound/dnstap.sock
+dtm run --input-unix /opt/unbound/dnstap.sock
 ```
 
 ## Development
