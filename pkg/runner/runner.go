@@ -1120,7 +1120,7 @@ func writeSessionParquet(dtm *dnstapMinimiser, ps *prevSessions, dataDir string)
 	// at this point we do not want the defer to close the file for us when returning
 	fileOpen = false
 	if err != nil {
-		return fmt.Errorf("writeSessionParquet: unable to call WriteStop() on parquet writer: %w", err)
+		return fmt.Errorf("writeSessionParquet: unable to call Close() on parquet writer: %w", err)
 	}
 
 	// Atomically rename the file to its real name so it can be picked up by the histogram sender
@@ -1233,7 +1233,7 @@ func writeHistogramParquet(dtm *dnstapMinimiser, prevWellKnownDomainsData *wellK
 	// at this point we do not want the defer to close the file for us when returning
 	fileOpen = false
 	if err != nil {
-		return fmt.Errorf("writeHistogramParquet: unable to call WriteStop() on parquet writer: %w", err)
+		return fmt.Errorf("writeHistogramParquet: unable to call Close() on parquet writer: %w", err)
 	}
 
 	// Atomically rename the file to its real name so it can be picked up by the histogram sender
