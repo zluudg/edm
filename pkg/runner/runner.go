@@ -9,8 +9,10 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"hash"
+	"io/fs"
 	"log"
 	"log/slog"
 	"math/big"
@@ -634,18 +636,6 @@ func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPu
 	outboxDir := filepath.Join(dataDir, "parquet", "histograms", "outbox")
 	sentDir := filepath.Join(dataDir, "parquet", "histograms", "sent")
 
-	// Make sure the directories exist
-	err := os.MkdirAll(outboxDir, 0750)
-	if err != nil {
-		dtm.log.Error(fmt.Sprintf("runMinimiser: unable to create outbox dir: %s", err))
-		os.Exit(1)
-	}
-	err = os.MkdirAll(sentDir, 0750)
-	if err != nil {
-		dtm.log.Error(fmt.Sprintf("runMinimiser: unable to create sent dir: %s", err))
-		os.Exit(1)
-	}
-
 	// Start record writers and data senders in the background
 	wg.Add(1)
 	go sessionWriter(dtm, sessionWriterCh, dataDir, &wg)
@@ -921,6 +911,65 @@ func histogramWriter(dtm *dnstapMinimiser, ch chan *wellKnownDomainsData, labelL
 	dtm.log.Info("histogramWriter: exiting loop")
 }
 
+func renameFile(dtm *dnstapMinimiser, src string, dst string) error {
+	dstDir := filepath.Dir(dst)
+
+	// We are prepared for the destination directory not existing and will
+	// create it if needed and retry the rename in this case.
+	for {
+		err := os.Rename(src, dst)
+		if err == nil {
+			// Rename went well, we are done
+			return nil
+		}
+
+		if errors.Is(err, fs.ErrNotExist) {
+			// If the destionation directory does not exist we will
+			// need to create it and then retry the Rename() in the
+			// next iteration of the loop.
+			err = os.MkdirAll(dstDir, 0750)
+			if err != nil {
+				return fmt.Errorf("renameFile: unable to create destination dir: %s: %w", dstDir, err)
+			}
+			dtm.log.Info("renameFile: created directory", "dir", dstDir)
+		} else {
+			// Some other error occured
+			return fmt.Errorf("renameFile: unable to rename file, src: %s, dst: %s: %w", src, dst, err)
+		}
+	}
+}
+
+func createFile(dtm *dnstapMinimiser, dst string) (*os.File, error) {
+	dstDir := filepath.Dir(dst)
+
+	// Make gosec happy
+	dst = filepath.Clean(dst)
+
+	// We are prepared for the destination directory not existing and will
+	// create it if needed and retry the creation in this case.
+	for {
+		outFile, err := os.Create(dst)
+		if err == nil {
+			// Creation went well, we are done
+			return outFile, nil
+		}
+
+		if errors.Is(err, fs.ErrNotExist) {
+			// If the destionation directory does not exist we will
+			// need to create it and then retry the file Create()
+			// the next iteration of the loop.
+			err = os.MkdirAll(dstDir, 0750)
+			if err != nil {
+				return nil, fmt.Errorf("createFile: unable to create destination dir: %s: %w", dstDir, err)
+			}
+			dtm.log.Info("createFile: created directory", "dir", dstDir)
+		} else {
+			// Some other error occured
+			return nil, fmt.Errorf("createFile: unable to create file, dst: %s: %w", dst, err)
+		}
+	}
+}
+
 func histogramSender(dtm *dnstapMinimiser, closerCh chan struct{}, outboxDir string, sentDir string, aggSender aggregateSender, wg *sync.WaitGroup) {
 	defer wg.Done()
 
@@ -935,6 +984,10 @@ timerLoop:
 		case <-ticker.C:
 			dirEntries, err := os.ReadDir(outboxDir)
 			if err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					// The directory has not been created yet, this is OK
+					continue
+				}
 				dtm.log.Error("histogramSender: unable to read outbox dir", "error", err)
 				continue
 			}
@@ -943,7 +996,6 @@ timerLoop:
 					continue
 				}
 				if strings.HasPrefix(dirEntry.Name(), "dns_histogram-") && strings.HasSuffix(dirEntry.Name(), ".parquet") {
-
 					startTS, stopTS, err := timestampsFromFilename(dirEntry.Name())
 					if err != nil {
 						dtm.log.Error("histogramSender: unable to parse timestamps from histogram filename", "error", err)
@@ -957,7 +1009,7 @@ timerLoop:
 					if err != nil {
 						dtm.log.Error("histogramSender: unable to send histogram file", "error", err)
 					}
-					err = os.Rename(absPath, absPathSent)
+					err = renameFile(dtm, absPath, absPathSent)
 					if err != nil {
 						dtm.log.Error("histogramSender: unable to rename sent histogram file", "error", err)
 					}
@@ -1082,7 +1134,7 @@ func writeSessionParquet(dtm *dnstapMinimiser, ps *prevSessions, dataDir string)
 	absoluteTmpFileName = filepath.Clean(absoluteTmpFileName) // Make gosec happy
 	dtm.log.Info("writing out session parquet file", "filename", absoluteTmpFileName)
 
-	outFile, err := os.Create(absoluteTmpFileName)
+	outFile, err := createFile(dtm, absoluteTmpFileName)
 	if err != nil {
 		return fmt.Errorf("writeSessionParquet: unable to open histogram file: %w", err)
 	}
@@ -1169,7 +1221,6 @@ func getStartTimeFromRotationTime(rotationTime time.Time) time.Time {
 }
 
 func writeHistogramParquet(dtm *dnstapMinimiser, prevWellKnownDomainsData *wellKnownDomainsData, labelLimit int, outboxDir string) error {
-
 	startTime := getStartTimeFromRotationTime(prevWellKnownDomainsData.rotationTime)
 
 	absoluteTmpFileName, absoluteFileName := buildParquetFilenames(outboxDir, "dns_histogram", startTime, prevWellKnownDomainsData.rotationTime)
@@ -1177,7 +1228,7 @@ func writeHistogramParquet(dtm *dnstapMinimiser, prevWellKnownDomainsData *wellK
 	dtm.log.Info("writing out histogram file", "filename", absoluteTmpFileName)
 
 	absoluteTmpFileName = filepath.Clean(absoluteTmpFileName)
-	outFile, err := os.Create(absoluteTmpFileName)
+	outFile, err := createFile(dtm, absoluteTmpFileName)
 	if err != nil {
 		return fmt.Errorf("writeHistogramParquet: unable to open histogram file: %w", err)
 	}
