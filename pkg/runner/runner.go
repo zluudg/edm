@@ -31,6 +31,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cockroachdb/pebble"
 	dnstap "github.com/dnstap/golang-dnstap"
 	"github.com/dnstapir/dtm/pkg/protocols"
 	"github.com/eclipse/paho.golang/autopaho"
@@ -290,6 +291,19 @@ func Run() {
 		os.Exit(1)
 	}
 
+	pdbDir := filepath.Join(viper.GetString("data-dir"), "pebble")
+	pdb, err := pebble.Open(pdbDir, &pebble.Options{})
+	if err != nil {
+		logger.Error("unable to open pebble database", "dir", pdbDir, "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		err = pdb.Close()
+		if err != nil {
+			dtm.log.Error("unable to close pebble database", "error", err)
+		}
+	}()
+
 	autopahoConfig, err := newAutoPahoClientConfig(dtm, mqttCACertPool, viper.GetString("mqtt-server"), viper.GetString("mqtt-client-id"), mqttClientCert, uint16(viper.GetInt("mqtt-keepalive")))
 	if err != nil {
 		logger.Error("unable to create autopaho config", "error", err)
@@ -409,7 +423,7 @@ func Run() {
 	}()
 
 	// Start minimiser
-	go dtm.runMinimiser(viper.GetString("well-known-domains"), viper.GetString("data-Dir"), mqttPubCh, seenQnameLRU, viper.GetInt("new-qname-buffer"), aggregSender)
+	go dtm.runMinimiser(viper.GetString("well-known-domains"), viper.GetString("data-dir"), mqttPubCh, seenQnameLRU, pdb, viper.GetInt("new-qname-buffer"), aggregSender)
 
 	// Start dnstap.Input
 	go dti.ReadInto(dtm.inputChannel)
@@ -590,10 +604,52 @@ func (wkd *wellKnownDomainsTracker) rotateTracker(dawgFile string, rotationTime 
 	return prevWKD, nil
 }
 
+// Check if we have already seen this qname since we started.
+func qnameSeen(dtm *dnstapMinimiser, msg *dns.Msg, seenQnameLRU *lru.Cache[string, struct{}], pdb *pebble.DB) bool {
+	// NOTE: This looks like it might be a race (calling
+	// Get() followed by separate Add()) but since we want
+	// to keep often looked-up names in the cache we need to
+	// use Get() for updating recent-ness, and there is no
+	// GetOrAdd() method available. However, it should be
+	// safe for multiple threads to call Add() as this will
+	// only move an already added entry to the front of the
+	// eviction list which should be OK.
+
+	_, ok := seenQnameLRU.Get(msg.Question[0].Name)
+	if ok {
+		// It exists in the LRU cache
+		return true
+	}
+	// Add it to the LRU
+	seenQnameLRU.Add(msg.Question[0].Name, struct{}{})
+
+	// It was not in the LRU cache, does it exist in pebble (on disk)?
+	_, closer, err := pdb.Get([]byte(msg.Question[0].Name))
+	if err == nil {
+		// The value exists in pebble
+		if err := closer.Close(); err != nil {
+			dtm.log.Error("unable to close pebble get", "error", err)
+		}
+		return true
+	}
+
+	// If the key does not exist in pebble we insert it
+	if errors.Is(err, pebble.ErrNotFound) {
+		if err := pdb.Set([]byte(msg.Question[0].Name), []byte{}, pebble.Sync); err != nil {
+			dtm.log.Error("unable to insert key in pebble", "error", err)
+		}
+		return false
+	}
+
+	// Some other error occured
+	dtm.log.Error("unable to get key from pebble", "error", err)
+	return false
+}
+
 // runMinimiser reads frames from the inputChannel, doing any modifications and
 // then passes them on to a dnstap.Output. To gracefully stop
 // runMinimiser() you need to close the dtm.stop channel.
-func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPubCh chan []byte, seenQnameLRU *lru.Cache[string, struct{}], newQnameBuffer int, aggSender aggregateSender) {
+func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPubCh chan []byte, seenQnameLRU *lru.Cache[string, struct{}], pdb *pebble.DB, newQnameBuffer int, aggSender aggregateSender) {
 
 	dnstapProcessed := promauto.NewCounter(prometheus.CounterOpts{
 		Name: "dtm_processed_dnstap_total",
@@ -710,18 +766,7 @@ minimiserLoop:
 				continue
 			}
 
-			// Check if we have already seen this qname since we started.
-			//
-			// NOTE: This looks like it might be a race (calling
-			// Get() followed by separate Add()) but since we want
-			// to keep often looked-up names in the cache we need to
-			// use Get() for updating recent-ness, and there is no
-			// GetOrAdd() method available. However, it should be
-			// safe for multiple threads to call Add() as this will
-			// only move an already added entry to the front of the
-			// eviction list which should be OK.
-			if _, qnameSeen := seenQnameLRU.Get(msg.Question[0].Name); !qnameSeen {
-				seenQnameLRU.Add(msg.Question[0].Name, struct{}{})
+			if !qnameSeen(dtm, msg, seenQnameLRU, pdb) {
 				newQname := protocols.NewQnameEvent(msg, timestamp)
 
 				// If the queue is full we skip sending new_qname events on the bus
@@ -732,7 +777,6 @@ minimiserLoop:
 					// If the publisher channel is full we skip creating an event.
 					newQnameDiscarded.Inc()
 				}
-
 			}
 
 			session := newSession(dtm, dt, msg, isQuery, labelLimit, timestamp)
