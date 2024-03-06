@@ -422,7 +422,7 @@ func Run() {
 	}()
 
 	// Start minimiser
-	go dtm.runMinimiser(viper.GetString("well-known-domains"), viper.GetString("data-dir"), mqttPubCh, seenQnameLRU, pdb, viper.GetInt("new-qname-buffer"), aggregSender)
+	go dtm.runMinimiser(viper.GetString("well-known-domains"), viper.GetString("data-dir"), mqttPubCh, seenQnameLRU, pdb, viper.GetInt("new-qname-buffer"), aggregSender, autopahoCtx, autopahoCancel)
 
 	// Start dnstap.Input
 	go dti.ReadInto(dtm.inputChannel)
@@ -430,9 +430,7 @@ func Run() {
 	// Wait here until runMinimiser() is done
 	<-dtm.done
 
-	// Gracefully disconnect from MQTT bus
-	close(mqttPubCh)
-	autopahoCancel()
+	// Wait for graceful disconnection from MQTT bus
 	autopahoWg.Wait()
 }
 
@@ -648,7 +646,7 @@ func qnameSeen(dtm *dnstapMinimiser, msg *dns.Msg, seenQnameLRU *lru.Cache[strin
 // runMinimiser reads frames from the inputChannel, doing any modifications and
 // then passes them on to a dnstap.Output. To gracefully stop
 // runMinimiser() you need to close the dtm.stop channel.
-func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPubCh chan []byte, seenQnameLRU *lru.Cache[string, struct{}], pdb *pebble.DB, newQnameBuffer int, aggSender aggregateSender) {
+func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPubCh chan []byte, seenQnameLRU *lru.Cache[string, struct{}], pdb *pebble.DB, newQnameBuffer int, aggSender aggregateSender, autopahoCtx context.Context, autopahoCancel context.CancelFunc) {
 
 	dnstapProcessed := promauto.NewCounter(prometheus.CounterOpts{
 		Name: "dtm_processed_dnstap_total",
@@ -695,7 +693,7 @@ func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPu
 	go sessionWriter(dtm, sessionWriterCh, dataDir, &wg)
 	go histogramWriter(dtm, histogramWriterCh, labelLimit, outboxDir, &wg)
 	go histogramSender(dtm, histogramSenderCloserCh, outboxDir, sentDir, aggSender, &wg)
-	go newQnamePublisher(dtm, newQnamePublisherCh, mqttPubCh, &wg)
+	go newQnamePublisher(dtm, newQnamePublisherCh, mqttPubCh, &wg, autopahoCtx)
 
 	go monitorChannelLen(newQnamePublisherCh)
 
@@ -817,6 +815,11 @@ minimiserLoop:
 			close(histogramWriterCh)
 			close(histogramSenderCloserCh)
 			close(newQnamePublisherCh)
+
+			// Stop the MQTT publisher
+			autopahoCancel()
+
+			// Wait for all workers to exit
 			wg.Wait()
 
 			break minimiserLoop
@@ -1082,9 +1085,10 @@ func timestampsFromFilename(name string) (time.Time, time.Time, error) {
 	return startTime, stopTime, nil
 }
 
-func newQnamePublisher(dtm *dnstapMinimiser, inputCh chan *protocols.EventsMqttMessageNewQnameJson, mqttPubCh chan []byte, wg *sync.WaitGroup) {
+func newQnamePublisher(dtm *dnstapMinimiser, inputCh chan *protocols.EventsMqttMessageNewQnameJson, mqttPubCh chan []byte, wg *sync.WaitGroup, autopahoCtx context.Context) {
 	wg.Add(1)
 	defer wg.Done()
+
 	for newQname := range inputCh {
 		newQnameJSON, err := json.Marshal(newQname)
 		if err != nil {
@@ -1092,7 +1096,14 @@ func newQnamePublisher(dtm *dnstapMinimiser, inputCh chan *protocols.EventsMqttM
 			continue
 		}
 
-		mqttPubCh <- newQnameJSON
+		select {
+		case mqttPubCh <- newQnameJSON:
+		case <-autopahoCtx.Done():
+			dtm.log.Info("newQnamePublisher: the MQTT connection is shutting down, stop writing")
+			close(mqttPubCh)
+			// No need to break out of for loop here because
+			// inputCh is already closed in runMinimiser()
+		}
 	}
 	dtm.log.Info("newQnamePublisher: exiting loop")
 }
