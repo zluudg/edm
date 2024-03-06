@@ -693,13 +693,9 @@ func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPu
 	sentDir := filepath.Join(dataDir, "parquet", "histograms", "sent")
 
 	// Start record writers and data senders in the background
-	wg.Add(1)
 	go sessionWriter(dtm, sessionWriterCh, dataDir, &wg)
-	wg.Add(1)
 	go histogramWriter(dtm, histogramWriterCh, labelLimit, outboxDir, &wg)
-	wg.Add(1)
 	go histogramSender(dtm, histogramSenderCloserCh, outboxDir, sentDir, aggSender, &wg)
-	wg.Add(1)
 	go newQnamePublisher(dtm, newQnamePublisherCh, mqttPubCh, &wg)
 
 	go monitorChannelLen(newQnamePublisherCh)
@@ -932,6 +928,7 @@ func newSession(dtm *dnstapMinimiser, dt *dnstap.Dnstap, msg *dns.Msg, isQuery b
 }
 
 func sessionWriter(dtm *dnstapMinimiser, ch chan *prevSessions, dataDir string, wg *sync.WaitGroup) {
+	wg.Add(1)
 	defer wg.Done()
 	for ps := range ch {
 		err := writeSessionParquet(dtm, ps, dataDir)
@@ -944,6 +941,7 @@ func sessionWriter(dtm *dnstapMinimiser, ch chan *prevSessions, dataDir string, 
 }
 
 func histogramWriter(dtm *dnstapMinimiser, ch chan *wellKnownDomainsData, labelLimit int, outboxDir string, wg *sync.WaitGroup) {
+	wg.Add(1)
 	defer wg.Done()
 	for prevWellKnownDomainsData := range ch {
 		err := writeHistogramParquet(dtm, prevWellKnownDomainsData, labelLimit, outboxDir)
@@ -1015,6 +1013,7 @@ func createFile(dtm *dnstapMinimiser, dst string) (*os.File, error) {
 }
 
 func histogramSender(dtm *dnstapMinimiser, closerCh chan struct{}, outboxDir string, sentDir string, aggSender aggregateSender, wg *sync.WaitGroup) {
+	wg.Add(1)
 	defer wg.Done()
 
 	// We will scan the outbox directory each tick for histogram parquet
@@ -1085,6 +1084,7 @@ func timestampsFromFilename(name string) (time.Time, time.Time, error) {
 }
 
 func newQnamePublisher(dtm *dnstapMinimiser, inputCh chan *protocols.EventsMqttMessageNewQnameJson, mqttPubCh chan []byte, wg *sync.WaitGroup) {
+	wg.Add(1)
 	defer wg.Done()
 	for newQname := range inputCh {
 		newQnameJSON, err := json.Marshal(newQname)
