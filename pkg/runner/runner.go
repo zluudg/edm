@@ -323,7 +323,6 @@ func Run() {
 	// Setup channel for reading messages to publish
 	mqttPubCh := make(chan []byte, 100)
 
-	autopahoWg.Add(1)
 	go runAutoPaho(autopahoCtx, &autopahoWg, autopahoCm, dtm, mqttPubCh, viper.GetString("mqtt-topic"), mqttSigningKey)
 
 	// Setup the dnstap.Input, only one at a time is supported.

@@ -52,6 +52,7 @@ func newAutoPahoClientConfig(dtm *dnstapMinimiser, caCertPool *x509.CertPool, se
 }
 
 func runAutoPaho(ctx context.Context, wg *sync.WaitGroup, cm *autopaho.ConnectionManager, dtm *dnstapMinimiser, mqttPubCh chan []byte, topic string, mqttSigningKey *ecdsa.PrivateKey) {
+	wg.Add(1)
 	defer wg.Done()
 	for {
 		// AwaitConnection will return immediately if connection is up; adding this call stops publication whilst
