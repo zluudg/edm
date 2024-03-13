@@ -1,6 +1,6 @@
 module github.com/dnstapir/dtm
 
-go 1.21.4
+go 1.22.1
 
 require (
 	github.com/cockroachdb/pebble v1.1.0
