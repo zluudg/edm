@@ -431,6 +431,7 @@ func Run() {
 	<-dtm.done
 
 	// Wait for graceful disconnection from MQTT bus
+	dtm.log.Info("Run: waiting on MQTT disconnection")
 	autopahoWg.Wait()
 }
 
@@ -819,15 +820,18 @@ minimiserLoop:
 			close(newQnamePublisherCh)
 
 			// Stop the MQTT publisher
+			dtm.log.Info("runMinimiser: stopping MQTT publisher")
 			autopahoCancel()
 
 			// Wait for all workers to exit
+			dtm.log.Info("runMinimiser: waiting for workers to exit")
 			wg.Wait()
 
 			break minimiserLoop
 		}
 	}
 	// Signal main() that we are done and ready to exit
+	dtm.log.Info("runMinimiser: signaling we are done")
 	close(dtm.done)
 }
 

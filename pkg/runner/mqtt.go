@@ -67,6 +67,7 @@ func runAutoPaho(ctx context.Context, wg *sync.WaitGroup, cm *autopaho.Connectio
 		unsignedMsg := <-mqttPubCh
 		if unsignedMsg == nil {
 			// The channel has been closed
+			dtm.log.Info("runAutoPaho: message queue closed, exiting")
 			return
 		}
 
