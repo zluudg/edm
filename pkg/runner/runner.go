@@ -422,7 +422,7 @@ func Run() {
 	}()
 
 	// Start minimiser
-	go dtm.runMinimiser(viper.GetString("well-known-domains"), viper.GetString("data-dir"), mqttPubCh, seenQnameLRU, pdb, viper.GetInt("new-qname-buffer"), aggregSender, autopahoCtx, autopahoCancel)
+	go dtm.runMinimiser(viper.GetString("well-known-domains"), viper.GetString("data-dir"), mqttPubCh, seenQnameLRU, pdb, viper.GetInt("new-qname-buffer"), aggregSender, autopahoCtx, autopahoCancel, viper.GetBool("disable-session-files"))
 
 	// Start dnstap.Input
 	go dti.ReadInto(dtm.inputChannel)
@@ -646,7 +646,7 @@ func qnameSeen(dtm *dnstapMinimiser, msg *dns.Msg, seenQnameLRU *lru.Cache[strin
 // runMinimiser reads frames from the inputChannel, doing any modifications and
 // then passes them on to a dnstap.Output. To gracefully stop
 // runMinimiser() you need to close the dtm.stop channel.
-func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPubCh chan []byte, seenQnameLRU *lru.Cache[string, struct{}], pdb *pebble.DB, newQnameBuffer int, aggSender aggregateSender, autopahoCtx context.Context, autopahoCancel context.CancelFunc) {
+func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPubCh chan []byte, seenQnameLRU *lru.Cache[string, struct{}], pdb *pebble.DB, newQnameBuffer int, aggSender aggregateSender, autopahoCtx context.Context, autopahoCancel context.CancelFunc, disableSessionFiles bool) {
 
 	dnstapProcessed := promauto.NewCounter(prometheus.CounterOpts{
 		Name: "dtm_processed_dnstap_total",
@@ -772,14 +772,16 @@ minimiserLoop:
 				}
 			}
 
-			session := newSession(dtm, dt, msg, isQuery, labelLimit, timestamp)
+			if !disableSessionFiles {
+				session := newSession(dtm, dt, msg, isQuery, labelLimit, timestamp)
 
-			sessions = append(sessions, session)
+				sessions = append(sessions, session)
 
-			// Since we have appended at least one session in the
-			// sessions slice at this point we have things to write
-			// out.
-			session_updated = true
+				// Since we have appended at least one session in the
+				// sessions slice at this point we have things to write
+				// out.
+				session_updated = true
+			}
 		case ts := <-ticker.C:
 			// We want to tick at the start of each minute
 			ticker.Reset(timeUntilNextMinute())

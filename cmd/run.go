@@ -30,6 +30,7 @@ func init() {
 	// is called directly, e.g.:
 	// runCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 	runCmd.Flags().Bool("debug", false, "print debug logging during operation")
+	runCmd.Flags().Bool("disable-session-files", false, "do not write out session parquet files")
 
 	runCmd.Flags().String("input-unix", "", "create unix socket for reading dnstap (e.g. /var/lib/unbound/dnstap.sock)")
 	runCmd.Flags().String("input-tcp", "", "create TCP socket for reading dnstap (e.g. '127.0.0.1:53535')")
