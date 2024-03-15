@@ -1106,11 +1106,11 @@ func newQnamePublisher(dtm *dnstapMinimiser, inputCh chan *protocols.EventsMqttM
 		case mqttPubCh <- newQnameJSON:
 		case <-autopahoCtx.Done():
 			dtm.log.Info("newQnamePublisher: the MQTT connection is shutting down, stop writing")
-			close(mqttPubCh)
 			// No need to break out of for loop here because
 			// inputCh is already closed in runMinimiser()
 		}
 	}
+	close(mqttPubCh)
 	dtm.log.Info("newQnamePublisher: exiting loop")
 }
 
