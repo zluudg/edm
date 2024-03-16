@@ -35,6 +35,7 @@ import (
 	dnstap "github.com/dnstap/golang-dnstap"
 	"github.com/dnstapir/dtm/pkg/protocols"
 	"github.com/eclipse/paho.golang/autopaho"
+	_ "github.com/grafana/pyroscope-go/godeltaprof/http/pprof"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/miekg/dns"
 	"github.com/prometheus/client_golang/prometheus"
