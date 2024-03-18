@@ -6,6 +6,7 @@ require (
 	github.com/cockroachdb/pebble v1.1.0
 	github.com/dnstap/golang-dnstap v0.4.0
 	github.com/eclipse/paho.golang v0.21.0
+	github.com/grafana/pyroscope-go/godeltaprof v0.1.7
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/lestrrat-go/jwx/v2 v2.0.21
 	github.com/miekg/dns v1.1.58
@@ -42,7 +43,6 @@ require (
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/google/flatbuffers v23.5.26+incompatible // indirect
 	github.com/gorilla/websocket v1.5.1 // indirect
-	github.com/grafana/pyroscope-go/godeltaprof v0.1.7 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/klauspost/compress v1.17.7 // indirect
@@ -72,7 +72,7 @@ require (
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/xitongsys/parquet-go-source v0.0.0-20240122235623-d6294584ab18 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/exp v0.0.0-20240222234643-814bf88cf225 // indirect
+	golang.org/x/exp v0.0.0-20240314144324-c7f7c6466f7f // indirect
 	golang.org/x/mod v0.16.0 // indirect
 	golang.org/x/net v0.22.0 // indirect
 	golang.org/x/sys v0.18.0 // indirect
