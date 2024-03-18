@@ -208,6 +208,57 @@ func reverseLabelsBounded(dtm *dnstapMinimiser, labels []string, maxLen int) []s
 	return boundedReverseLabels
 }
 
+func diskCleaner(dtm *dnstapMinimiser, wg *sync.WaitGroup, sentDir string) {
+	// We will scan the directory each tick for sent files to remove.
+	wg.Add(1)
+	defer wg.Done()
+
+	ticker := time.NewTicker(time.Second * 60)
+	defer ticker.Stop()
+
+	oneDay := time.Hour * 12
+
+timerLoop:
+	for {
+		select {
+		case <-ticker.C:
+			dirEntries, err := os.ReadDir(sentDir)
+			if err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					// The directory has not been created yet, this is OK
+					continue
+				}
+				dtm.log.Error("histogramSender: unable to read sent dir", "error", err)
+				continue
+			}
+			for _, dirEntry := range dirEntries {
+				if dirEntry.IsDir() {
+					continue
+				}
+				if strings.HasPrefix(dirEntry.Name(), "dns_histogram-") && strings.HasSuffix(dirEntry.Name(), ".parquet") {
+					fileInfo, err := dirEntry.Info()
+					if err != nil {
+						dtm.log.Error("diskCleaner: unable to get fileInfo for filename", "error", err, "filename", dirEntry.Name())
+						continue
+					}
+
+					if time.Since(fileInfo.ModTime()) > oneDay {
+						absPath := filepath.Join(sentDir, dirEntry.Name())
+						dtm.log.Info("diskCleaner: removing file", "filename", absPath)
+						err = os.Remove(absPath)
+						if err != nil {
+							dtm.log.Error("diskCleaner: unable to remove sent histogram file", "error", err)
+						}
+					}
+				}
+			}
+		case <-dtm.stop:
+			break timerLoop
+		}
+	}
+	dtm.log.Info("exiting diskCleaner loop")
+}
+
 func Run() {
 
 	// Logger used for all output
@@ -680,8 +731,6 @@ func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPu
 	// minimiser loop, otherwise the program can hang on shutdown.
 	sessionWriterCh := make(chan *prevSessions, 100)
 	histogramWriterCh := make(chan *wellKnownDomainsData, 100)
-	// This channel is only used for stopping the goroutine, so no buffer needed
-	histogramSenderCloserCh := make(chan struct{})
 	newQnamePublisherCh := make(chan *protocols.EventsMqttMessageNewQnameJson, newQnameBuffer)
 
 	var wg sync.WaitGroup
@@ -694,10 +743,11 @@ func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPu
 	// Start record writers and data senders in the background
 	go sessionWriter(dtm, sessionWriterCh, dataDir, &wg)
 	go histogramWriter(dtm, histogramWriterCh, labelLimit, outboxDir, &wg)
-	go histogramSender(dtm, histogramSenderCloserCh, outboxDir, sentDir, aggSender, &wg)
+	go histogramSender(dtm, outboxDir, sentDir, aggSender, &wg)
 	go newQnamePublisher(dtm, newQnamePublisherCh, mqttPubCh, &wg, autopahoCtx)
 
 	go monitorChannelLen(newQnamePublisherCh)
+	go diskCleaner(dtm, &wg, sentDir)
 
 	dawgFinder, err := dawg.Load(dawgFile)
 	if err != nil {
@@ -817,7 +867,6 @@ minimiserLoop:
 			// Make sure writers have completed their work
 			close(sessionWriterCh)
 			close(histogramWriterCh)
-			close(histogramSenderCloserCh)
 			close(newQnamePublisherCh)
 
 			// Stop the MQTT publisher
@@ -1021,7 +1070,7 @@ func createFile(dtm *dnstapMinimiser, dst string) (*os.File, error) {
 	}
 }
 
-func histogramSender(dtm *dnstapMinimiser, closerCh chan struct{}, outboxDir string, sentDir string, aggSender aggregateSender, wg *sync.WaitGroup) {
+func histogramSender(dtm *dnstapMinimiser, outboxDir string, sentDir string, aggSender aggregateSender, wg *sync.WaitGroup) {
 	wg.Add(1)
 	defer wg.Done()
 
@@ -1067,8 +1116,7 @@ timerLoop:
 					}
 				}
 			}
-		case <-closerCh:
-			// If this channel is closed it is time to exit
+		case <-dtm.stop:
 			break timerLoop
 		}
 	}
