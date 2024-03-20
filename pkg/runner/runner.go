@@ -790,6 +790,10 @@ minimiserLoop:
 
 			msg, timestamp := parsePacket(dt, isQuery)
 
+			// Create a less specific timestamp for data sent to
+			// core to make precise tracking harder.
+			truncatedTimestamp := timestamp.Truncate(time.Minute)
+
 			// For cases where we were unable to unpack the DNS message we
 			// skip parsing.
 			if msg == nil || len(msg.Question) == 0 {
@@ -812,7 +816,7 @@ minimiserLoop:
 			}
 
 			if !qnameSeen(dtm, msg, seenQnameLRU, pdb) {
-				newQname := protocols.NewQnameEvent(msg, timestamp)
+				newQname := protocols.NewQnameEvent(msg, truncatedTimestamp)
 
 				// If the queue is full we skip sending new_qname events on the bus
 				select {

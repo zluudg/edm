@@ -113,7 +113,7 @@ func (as aggregateSender) send(fileName string, ts time.Time, duration time.Dura
 	// Aggregate-Interval: 2023-11-16T09:24:13.487591+01:00/PT1M
 	minutesFloat := duration.Minutes()
 	minutes := int(math.Round(minutesFloat))
-	req.Header.Add("Aggregate-Interval", fmt.Sprintf("%s/PT%dM", ts.Format(time.RFC3339), minutes))
+	req.Header.Add("Aggregate-Interval", fmt.Sprintf("%s/PT%dM", ts.Truncate(time.Minute).Format(time.RFC3339), minutes))
 
 	as.dtm.log.Info("aggregateSender.send", "filename", fileName, "url", histogramURL)
 	startTime := time.Now()
