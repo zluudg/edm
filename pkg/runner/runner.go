@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"log"
 	"log/slog"
+	"math"
 	"math/big"
 	"net"
 	"net/http"
@@ -35,6 +36,7 @@ import (
 	dnstap "github.com/dnstap/golang-dnstap"
 	"github.com/dnstapir/dtm/pkg/protocols"
 	"github.com/eclipse/paho.golang/autopaho"
+	"github.com/fsnotify/fsnotify"
 	_ "github.com/grafana/pyroscope-go/godeltaprof/http/pprof"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/miekg/dns"
@@ -259,6 +261,55 @@ timerLoop:
 	dtm.log.Info("exiting diskCleaner loop")
 }
 
+func setCryptopan(dtm *dnstapMinimiser, e fsnotify.Event) {
+
+	dtm.log.Info("setCryptopan: reacting to config file update", "filename", e.Name)
+
+	var aesKeyLen uint32 = 32
+	aesKey := argon2.IDKey([]byte(viper.GetString("cryptopan-key")), []byte(viper.GetString("cryptopan-key-salt")), 1, 64*1024, 4, aesKeyLen)
+
+	cpn, err := cryptopan.New(aesKey)
+	if err != nil {
+		dtm.log.Error("setCryptopan: unable to create new cryptopan instance", "error", err)
+		return
+	}
+
+	dtm.mutex.Lock()
+	dtm.cryptopan = cpn
+	dtm.mutex.Unlock()
+}
+
+func configUpdater(viperNotifyCh chan fsnotify.Event, dtm *dnstapMinimiser) {
+	// The notifications from viper are based on
+	// https://github.com/fsnotify/fsnotify which means we can receive
+	// multiple events for the same file when someone modifies it. E.g. an
+	// editor like vim writing to the file can result in three events
+	// (CREATE, WRITE, WRITE) because of how the editor juggles the file
+	// during a write.
+	//
+	// To not let this translate to us updating settings three times when
+	// one is enough we wait a short duration for more events to occur
+	// before telling things to update.
+	//
+	// The code below is inspired by the example at:
+	// https://github.com/fsnotify/fsnotify/blob/main/cmd/fsnotify/dedup.go
+
+	// Start with creating a timer that will call the update function in the
+	// future but stop it so it never runs by default.
+	var e fsnotify.Event
+	t := time.AfterFunc(math.MaxInt64, func() { setCryptopan(dtm, e) })
+	t.Stop()
+
+	for e = range viperNotifyCh {
+		// If an event has been recevied this means we now want to
+		// enable the timer so the function will be called "soon", but
+		// if more events occur we will reset it again. This allows us
+		// to wait until events on the file settles down before
+		// actually calling the update function.
+		t.Reset(100 * time.Millisecond)
+	}
+}
+
 func Run() {
 
 	// Logger used for all output
@@ -342,6 +393,14 @@ func Run() {
 		logger.Error("unable to init dtm", "error", err)
 		os.Exit(1)
 	}
+
+	viperNotifyCh := make(chan fsnotify.Event)
+
+	go configUpdater(viperNotifyCh, dtm)
+
+	viper.OnConfigChange(func(e fsnotify.Event) {
+		viperNotifyCh <- e
+	})
 
 	pdbDir := filepath.Join(viper.GetString("data-dir"), "pebble")
 	pdb, err := pebble.Open(pdbDir, &pebble.Options{})
@@ -494,6 +553,7 @@ type dnstapMinimiser struct {
 	stop         chan struct{}        // close this channel to gracefully stop runMinimiser()
 	done         chan struct{}        // block on this channel to make sure output is flushed before exiting
 	debug        bool                 // if we should print debug messages during operation
+	mutex        sync.RWMutex         // Mutex for protecting updates to fields at runtime
 }
 
 func newDnstapMinimiser(logger *slog.Logger, cryptoPanKey []byte, debug bool) (*dnstapMinimiser, error) {
@@ -1446,12 +1506,15 @@ func certPoolFromFile(fileName string) (*x509.CertPool, error) {
 
 // Pseudonymize IP address fields in a dnstap message
 func (dtm *dnstapMinimiser) pseudonymizeDnstap(dt *dnstap.Dnstap) {
+	// Lock is used here because the cryptopan instance can get updated at runtime.
+	dtm.mutex.RLock()
 	if dt.Message.QueryAddress != nil {
 		dt.Message.QueryAddress = dtm.cryptopan.Anonymize(net.IP(dt.Message.QueryAddress))
 	}
 	if dt.Message.ResponseAddress != nil {
 		dt.Message.ResponseAddress = dtm.cryptopan.Anonymize(net.IP(dt.Message.ResponseAddress))
 	}
+	dtm.mutex.RUnlock()
 }
 
 func timeUntilNextMinute() time.Duration {

@@ -66,4 +66,7 @@ func initConfig() {
 	if err := viper.ReadInConfig(); err == nil {
 		fmt.Fprintln(os.Stderr, "Using config file:", viper.ConfigFileUsed())
 	}
+
+	// Make it so we can detect changes to the cryptopan secret in the config
+	viper.WatchConfig()
 }
