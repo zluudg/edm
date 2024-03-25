@@ -1356,6 +1356,7 @@ func writeSessionParquet(dtm *dnstapMinimiser, ps *prevSessions, dataDir string)
 		return fmt.Errorf("writeSessionParquet: unable to open histogram file: %w", err)
 	}
 	fileOpen := true
+	writeFailed := false
 	defer func() {
 		// Closing a *os.File twice returns an error, so only do it if
 		// we have not already tried to close it.
@@ -1363,6 +1364,13 @@ func writeSessionParquet(dtm *dnstapMinimiser, ps *prevSessions, dataDir string)
 			err := outFile.Close()
 			if err != nil {
 				dtm.log.Error("writeSessionParquet: unable to do deferred close of histogram outFile", "error", err)
+			}
+		}
+		if writeFailed {
+			dtm.log.Info("writeSessionParquet: cleaning up file because write failed", "filename", outFile.Name())
+			err = os.Remove(outFile.Name())
+			if err != nil {
+				dtm.log.Error("writeSessionParquet: unable to remove histogram outFile", "error", err, "filename", outFile.Name())
 			}
 		}
 	}()
@@ -1375,12 +1383,14 @@ func writeSessionParquet(dtm *dnstapMinimiser, ps *prevSessions, dataDir string)
 	for _, sessionData := range ps.sessions {
 		err = parquetWriter.Write(*sessionData)
 		if err != nil {
+			writeFailed = true
 			return fmt.Errorf("writeSessionParquet: unable to call Write() on parquet writer: %w", err)
 		}
 	}
 
 	err = parquetWriter.WriteStop()
 	if err != nil {
+		writeFailed = true
 		return fmt.Errorf("writeSessionParquet: unable to call WriteStop() on parquet writer: %w", err)
 	}
 
@@ -1389,6 +1399,7 @@ func writeSessionParquet(dtm *dnstapMinimiser, ps *prevSessions, dataDir string)
 	// at this point we do not want the defer to close the file for us when returning
 	fileOpen = false
 	if err != nil {
+		writeFailed = true
 		return fmt.Errorf("writeSessionParquet: unable to call Close() on parquet writer: %w", err)
 	}
 
@@ -1450,6 +1461,7 @@ func writeHistogramParquet(dtm *dnstapMinimiser, prevWellKnownDomainsData *wellK
 		return fmt.Errorf("writeHistogramParquet: unable to open histogram file: %w", err)
 	}
 	fileOpen := true
+	writeFailed := false
 	defer func() {
 		// Closing a *os.File twice returns an error, so only do it if
 		// we have not already tried to close it.
@@ -1457,6 +1469,13 @@ func writeHistogramParquet(dtm *dnstapMinimiser, prevWellKnownDomainsData *wellK
 			err := outFile.Close()
 			if err != nil {
 				dtm.log.Error("writeHistogramParquet: unable to do deferred close of histogram outFile", "error", err)
+			}
+		}
+		if writeFailed {
+			dtm.log.Info("writeHistogramParquet: cleaning up file because write failed", "filename", outFile.Name())
+			err = os.Remove(outFile.Name())
+			if err != nil {
+				dtm.log.Error("writeHistogramParquet: unable to remove histogram outFile", "error", err, "filename", outFile.Name())
 			}
 		}
 	}()
@@ -1487,12 +1506,14 @@ func writeHistogramParquet(dtm *dnstapMinimiser, prevWellKnownDomainsData *wellK
 
 		err = parquetWriter.Write(hGramData)
 		if err != nil {
+			writeFailed = true
 			return fmt.Errorf("writeHistogramParquet: unable to call Write() on parquet writer: %w", err)
 		}
 	}
 
 	err = parquetWriter.WriteStop()
 	if err != nil {
+		writeFailed = true
 		return fmt.Errorf("writeHistogramParquet: unable to call WriteStop() on parquet writer: %w", err)
 	}
 
@@ -1501,6 +1522,7 @@ func writeHistogramParquet(dtm *dnstapMinimiser, prevWellKnownDomainsData *wellK
 	// at this point we do not want the defer to close the file for us when returning
 	fileOpen = false
 	if err != nil {
+		writeFailed = true
 		return fmt.Errorf("writeHistogramParquet: unable to call Close() on parquet writer: %w", err)
 	}
 
