@@ -55,6 +55,42 @@ import (
 
 const dawgNotFound = -1
 
+type dtmStatusBits uint64
+
+func (dsb *dtmStatusBits) String() string {
+
+	if *dsb >= dtmStatusMax {
+		return fmt.Sprintf("unknown flags in status: %b", *dsb)
+	}
+
+	switch *dsb {
+	case dtmStatusWellKnownExact:
+		return "well-known-exact"
+	case dtmStatusWellKnownWildcard:
+		return "well-known-wildcard"
+	}
+
+	var flags []string
+	for flag := dtmStatusWellKnownExact; flag < dtmStatusMax; flag <<= 1 {
+		if *dsb&flag != 0 {
+			flags = append(flags, flag.String())
+		}
+	}
+	return strings.Join(flags, "|")
+}
+
+func (dsb *dtmStatusBits) set(flag dtmStatusBits) {
+	*dsb = *dsb | flag
+}
+
+const (
+	dtmStatusWellKnownExact    dtmStatusBits = 1 << iota // 1
+	dtmStatusWellKnownWildcard                           // 2
+
+	// Always leave max at the end to signal unused bits
+	dtmStatusMax
+)
+
 // Histogram struct implementing description at https://github.com/dnstapir/datasets/blob/main/HistogramReport.fbs
 type histogramData struct {
 	// The time we started collecting the data contained in the histogram
@@ -63,26 +99,26 @@ type histogramData struct {
 	// otherwise: "panic: reflect: reflect.Value.SetString using value obtained using unexported field"
 	// Also store them as pointers so we can signal them being unset as
 	// opposed to an empty string
-	Label0      *string `parquet:"name=label0, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label1      *string `parquet:"name=label1, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label2      *string `parquet:"name=label2, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label3      *string `parquet:"name=label3, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label4      *string `parquet:"name=label4, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label5      *string `parquet:"name=label5, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label6      *string `parquet:"name=label6, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label7      *string `parquet:"name=label7, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label8      *string `parquet:"name=label8, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label9      *string `parquet:"name=label9, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	ACount      int64   `parquet:"name=a_count, type=INT64, convertedtype=UINT_64"`
-	AAAACount   int64   `parquet:"name=aaaa_count, type=INT64, convertedtype=UINT_64"`
-	MXCount     int64   `parquet:"name=mx_count, type=INT64, convertedtype=UINT_64"`
-	NSCount     int64   `parquet:"name=ns_count, type=INT64, convertedtype=UINT_64"`
-	OtherCount  int64   `parquet:"name=other_count, type=INT64, convertedtype=UINT_64"`
-	NonINCount  int64   `parquet:"name=non_in_count, type=INT64, convertedtype=UINT_64"`
-	OKCount     int64   `parquet:"name=ok_count, type=INT64, convertedtype=UINT_64"`
-	NXCount     int64   `parquet:"name=nx_count, type=INT64, convertedtype=UINT_64"`
-	FailCount   int64   `parquet:"name=fail_count, type=INT64, convertedtype=UINT_64"`
-	SuffixMatch bool    `parquet:"name=suffix_match, type=BOOLEAN"`
+	Label0        *string `parquet:"name=label0, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label1        *string `parquet:"name=label1, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label2        *string `parquet:"name=label2, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label3        *string `parquet:"name=label3, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label4        *string `parquet:"name=label4, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label5        *string `parquet:"name=label5, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label6        *string `parquet:"name=label6, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label7        *string `parquet:"name=label7, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label8        *string `parquet:"name=label8, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label9        *string `parquet:"name=label9, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	ACount        int64   `parquet:"name=a_count, type=INT64, convertedtype=UINT_64"`
+	AAAACount     int64   `parquet:"name=aaaa_count, type=INT64, convertedtype=UINT_64"`
+	MXCount       int64   `parquet:"name=mx_count, type=INT64, convertedtype=UINT_64"`
+	NSCount       int64   `parquet:"name=ns_count, type=INT64, convertedtype=UINT_64"`
+	OtherCount    int64   `parquet:"name=other_count, type=INT64, convertedtype=UINT_64"`
+	NonINCount    int64   `parquet:"name=non_in_count, type=INT64, convertedtype=UINT_64"`
+	OKCount       int64   `parquet:"name=ok_count, type=INT64, convertedtype=UINT_64"`
+	NXCount       int64   `parquet:"name=nx_count, type=INT64, convertedtype=UINT_64"`
+	FailCount     int64   `parquet:"name=fail_count, type=INT64, convertedtype=UINT_64"`
+	DTMStatusBits int64   `parquet:"name=dtm_status_bits, type=INT64, convertedtype=UINT_64"`
 	// The hll.HLL structs are not expected to be included in the output
 	// parquet file, and thus do not need to be exported
 	v4ClientHLL           hll.Hll
@@ -646,7 +682,15 @@ func (wkd *wellKnownDomainsTracker) isKnown(ipBytes []byte, msg *dns.Msg) bool {
 		// We leave the label0-9 fields set to nil here. Since this is in
 		// the hot path of dealing with dnstap packets the less work we do the
 		// better. They are filled in prior to writing out the parquet file.
-		wkd.m[dawgIndex] = &histogramData{SuffixMatch: suffixMatch}
+		wkd.m[dawgIndex] = &histogramData{}
+
+		dsb := new(dtmStatusBits)
+		if suffixMatch {
+			dsb.set(dtmStatusWellKnownWildcard)
+		} else {
+			dsb.set(dtmStatusWellKnownExact)
+		}
+		wkd.m[dawgIndex].DTMStatusBits = int64(*dsb)
 	}
 
 	// Create hash from IP address for use in HLL data
