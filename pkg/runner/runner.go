@@ -3,7 +3,6 @@ package runner
 import (
 	"context"
 	"crypto/ecdsa"
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/binary"
@@ -16,7 +15,6 @@ import (
 	"log"
 	"log/slog"
 	"math"
-	"math/big"
 	"net"
 	"net/http"
 	_ "net/http/pprof" // #nosec G108 -- metricsServer only listens to localhost
@@ -626,14 +624,9 @@ type wellKnownDomainsData struct {
 
 func newWellKnownDomainsTracker(dawgFinder dawg.Finder) (*wellKnownDomainsTracker, error) {
 
-	// Create random uint32, rand.Int takes a half-open range so we give it [0,4294967296)
-	randInt, err := rand.Int(rand.Reader, big.NewInt(1<<32))
-	if err != nil {
-		return nil, fmt.Errorf("newWellKnownDomainsTracker: %w", err)
-	}
-	murmur3Seed := uint32(randInt.Uint64())
-
-	murmur3Hasher := murmur3.New64WithSeed(murmur3Seed)
+	// We use a deterministic seed by design to be able to combine HLL
+	// datasets.
+	murmur3Hasher := murmur3.New64()
 
 	return &wellKnownDomainsTracker{
 		wellKnownDomainsData: wellKnownDomainsData{
