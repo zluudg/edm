@@ -751,7 +751,7 @@ func (wkd *wellKnownDomainsTracker) rotateTracker(dawgFile string, rotationTime 
 }
 
 // Check if we have already seen this qname since we started.
-func qnameSeen(dtm *dnstapMinimiser, msg *dns.Msg, seenQnameLRU *lru.Cache[string, struct{}], pdb *pebble.DB) bool {
+func qnameSeen(dtm *dnstapMinimiser, msg *dns.Msg, seenQnameLRU *lru.Cache[string, struct{}], seenQnameLRUEvicted prometheus.Counter, pdb *pebble.DB) bool {
 	// NOTE: This looks like it might be a race (calling
 	// Get() followed by separate Add()) but since we want
 	// to keep often looked-up names in the cache we need to
@@ -767,7 +767,10 @@ func qnameSeen(dtm *dnstapMinimiser, msg *dns.Msg, seenQnameLRU *lru.Cache[strin
 		return true
 	}
 	// Add it to the LRU
-	seenQnameLRU.Add(msg.Question[0].Name, struct{}{})
+	evicted := seenQnameLRU.Add(msg.Question[0].Name, struct{}{})
+	if evicted {
+		seenQnameLRUEvicted.Inc()
+	}
 
 	// It was not in the LRU cache, does it exist in pebble (on disk)?
 	_, closer, err := pdb.Get([]byte(msg.Question[0].Name))
@@ -810,6 +813,11 @@ func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPu
 	newQnameDiscarded := promauto.NewCounter(prometheus.CounterOpts{
 		Name: "dtm_new_qname_discarded_total",
 		Help: "The total number of discarded new_qname events",
+	})
+
+	seenQnameLRUEvicted := promauto.NewCounter(prometheus.CounterOpts{
+		Name: "dtm_seen_qname_lru_evicted_total",
+		Help: "The total number of times something was evicted from the new_qname LRU cache",
 	})
 
 	dt := &dnstap.Dnstap{}
@@ -918,7 +926,7 @@ minimiserLoop:
 				continue
 			}
 
-			if !qnameSeen(dtm, msg, seenQnameLRU, pdb) {
+			if !qnameSeen(dtm, msg, seenQnameLRU, seenQnameLRUEvicted, pdb) {
 				newQname := protocols.NewQnameEvent(msg, truncatedTimestamp)
 
 				// If the queue is full we skip sending new_qname events on the bus
