@@ -537,8 +537,7 @@ func Run() {
 	// We need to keep track of domains that are not on the well-known
 	// domain list yet we have seen since we started. To limit the
 	// possibility of unbounded memory usage we use a LRU cache instead of
-	// something simpler like a map. This does mean that we can potentially
-	// re-send a new_qname event if the LRU is full.
+	// something simpler like a map.
 	seenQnameLRU, _ := lru.New[string, struct{}](viper.GetInt("qname-seen-entries"))
 
 	aggregSender := newAggregateSender(dtm, httpURL, viper.GetString("http-signing-key-id"), httpSigningKey, httpCACertPool, httpClientCert)
