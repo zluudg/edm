@@ -1,6 +1,6 @@
 # dtm: dnstap(ir) minimiser
 ## About
-Tool for reading dnstap data, pseudonymizing IP addresses and outputting minimised output data.
+Tool for reading dnstap data, pseudonymising IP addresses and outputting minimised output data.
 
 Currently expects to read dnstap from a unix socket and writes out parquet
 files for the collected information.

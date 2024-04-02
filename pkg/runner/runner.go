@@ -583,7 +583,7 @@ func Run() {
 type dnstapMinimiser struct {
 	inputChannel chan []byte          // the channel expected to be passed to dnstap ReadInto()
 	log          *slog.Logger         // any information logging is sent here
-	cryptopan    *cryptopan.Cryptopan // used for pseudonymizing IP addresses
+	cryptopan    *cryptopan.Cryptopan // used for pseudonymising IP addresses
 	stop         chan struct{}        // close this channel to gracefully stop runMinimiser()
 	done         chan struct{}        // block on this channel to make sure output is flushed before exiting
 	debug        bool                 // if we should print debug messages during operation
@@ -884,13 +884,13 @@ minimiserLoop:
 				dtm.log.Debug("dnstapMinimiser.runMinimiser: modifying dnstap message")
 			}
 
-			// Keep around the unpseudonymized client IP for HLL
+			// Keep around the unpseudonymised client IP for HLL
 			// data, be careful with logging or otherwise handling
 			// this IP as it is sensitive.
 			dangerRealClientIP := make([]byte, len(dt.Message.QueryAddress))
 			copy(dangerRealClientIP, dt.Message.QueryAddress)
 
-			dtm.pseudonymizeDnstap(dt)
+			dtm.pseudonymiseDnstap(dt)
 
 			msg, timestamp := parsePacket(dt, isQuery)
 
@@ -1570,49 +1570,49 @@ func certPoolFromFile(fileName string) (*x509.CertPool, error) {
 	return certPool, nil
 }
 
-// Pseudonymize IP address fields in a dnstap message
-func (dtm *dnstapMinimiser) pseudonymizeDnstap(dt *dnstap.Dnstap) {
+// Pseudonymise IP address fields in a dnstap message
+func (dtm *dnstapMinimiser) pseudonymiseDnstap(dt *dnstap.Dnstap) {
 	var err error
 
 	// Lock is used here because the cryptopan instance can get updated at runtime.
 	dtm.mutex.RLock()
 
 	if dt.Message.QueryAddress != nil {
-		dt.Message.QueryAddress, err = pseudonymizeIP(dtm, dt.Message.QueryAddress)
+		dt.Message.QueryAddress, err = pseudonymiseIP(dtm, dt.Message.QueryAddress)
 		if err != nil {
-			dtm.log.Error("pseudonymizeDnstap: unable to parse dt.Message.QueryAddress", "error", err)
+			dtm.log.Error("pseudonymiseDnstap: unable to parse dt.Message.QueryAddress", "error", err)
 		}
 	}
 	if dt.Message.ResponseAddress != nil {
-		dt.Message.ResponseAddress, err = pseudonymizeIP(dtm, dt.Message.ResponseAddress)
+		dt.Message.ResponseAddress, err = pseudonymiseIP(dtm, dt.Message.ResponseAddress)
 		if err != nil {
-			dtm.log.Error("pseudonymizeDnstap: unable to parse dt.Message.ResponseAddress", "error", err)
+			dtm.log.Error("pseudonymiseDnstap: unable to parse dt.Message.ResponseAddress", "error", err)
 		}
 	}
 
 	dtm.mutex.RUnlock()
 }
 
-// Pseudonymize IP address, even on error the returned []byte is usable (zeroed address)
-func pseudonymizeIP(dtm *dnstapMinimiser, ipBytes []byte) ([]byte, error) {
+// Pseudonymise IP address, even on error the returned []byte is usable (zeroed address)
+func pseudonymiseIP(dtm *dnstapMinimiser, ipBytes []byte) ([]byte, error) {
 	addr, ok := netip.AddrFromSlice(ipBytes)
 	if !ok {
 		// Replace address with zeroes since we do not know if
 		// the contained junk is somehow sensitive
 		return make([]byte, len(ipBytes)), errors.New("unable to parse addr")
 	} else {
-		anonymizedAddr, ok := netip.AddrFromSlice(dtm.cryptopan.Anonymize(addr.AsSlice()))
+		anonymisedAddr, ok := netip.AddrFromSlice(dtm.cryptopan.Anonymize(addr.AsSlice()))
 		if !ok {
 			// Replace address with zeroes here as well
 			// since we do not know if the contained junk
 			// is somehow sensitive.
-			return make([]byte, len(ipBytes)), errors.New("unable to anonymize addr")
+			return make([]byte, len(ipBytes)), errors.New("unable to anonymise addr")
 		}
 		// cryptopan.Anonymize() returns IPv4 addresses via net.IPv4(),
 		// meaning we will get IPv4 addresses mapped to IPv6, e.g.
 		// ::ffff:127.0.0.1. It is easier to handle these as native
 		// IPv4 addresses in our system so call Unmap() on it.
-		return anonymizedAddr.Unmap().AsSlice(), nil
+		return anonymisedAddr.Unmap().AsSlice(), nil
 	}
 }
 
