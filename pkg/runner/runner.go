@@ -1572,15 +1572,48 @@ func certPoolFromFile(fileName string) (*x509.CertPool, error) {
 
 // Pseudonymize IP address fields in a dnstap message
 func (dtm *dnstapMinimiser) pseudonymizeDnstap(dt *dnstap.Dnstap) {
+	var err error
+
 	// Lock is used here because the cryptopan instance can get updated at runtime.
 	dtm.mutex.RLock()
+
 	if dt.Message.QueryAddress != nil {
-		dt.Message.QueryAddress = dtm.cryptopan.Anonymize(net.IP(dt.Message.QueryAddress))
+		dt.Message.QueryAddress, err = pseudonymizeIP(dtm, dt.Message.QueryAddress)
+		if err != nil {
+			dtm.log.Error("pseudonymizeDnstap: unable to parse dt.Message.QueryAddress", "error", err)
+		}
 	}
 	if dt.Message.ResponseAddress != nil {
-		dt.Message.ResponseAddress = dtm.cryptopan.Anonymize(net.IP(dt.Message.ResponseAddress))
+		dt.Message.ResponseAddress, err = pseudonymizeIP(dtm, dt.Message.ResponseAddress)
+		if err != nil {
+			dtm.log.Error("pseudonymizeDnstap: unable to parse dt.Message.ResponseAddress", "error", err)
+		}
 	}
+
 	dtm.mutex.RUnlock()
+}
+
+// Pseudonymize IP address, even on error the returned []byte is usable (zeroed address)
+func pseudonymizeIP(dtm *dnstapMinimiser, ipBytes []byte) ([]byte, error) {
+	addr, ok := netip.AddrFromSlice(ipBytes)
+	if !ok {
+		// Replace address with zeroes since we do not know if
+		// the contained junk is somehow sensitive
+		return make([]byte, len(ipBytes)), errors.New("unable to parse addr")
+	} else {
+		anonymizedAddr, ok := netip.AddrFromSlice(dtm.cryptopan.Anonymize(addr.AsSlice()))
+		if !ok {
+			// Replace address with zeroes here as well
+			// since we do not know if the contained junk
+			// is somehow sensitive.
+			return make([]byte, len(ipBytes)), errors.New("unable to anonymize addr")
+		}
+		// cryptopan.Anonymize() returns IPv4 addresses via net.IPv4(),
+		// meaning we will get IPv4 addresses mapped to IPv6, e.g.
+		// ::ffff:127.0.0.1. It is easier to handle these as native
+		// IPv4 addresses in our system so call Unmap() on it.
+		return anonymizedAddr.Unmap().AsSlice(), nil
+	}
 }
 
 func timeUntilNextMinute() time.Duration {
