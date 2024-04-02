@@ -883,6 +883,13 @@ minimiserLoop:
 			if dtm.debug {
 				dtm.log.Debug("dnstapMinimiser.runMinimiser: modifying dnstap message")
 			}
+
+			// Keep around the unpseudonymized client IP for HLL
+			// data, be careful with logging or otherwise handling
+			// this IP as it is sensitive.
+			dangerRealClientIP := make([]byte, len(dt.Message.QueryAddress))
+			copy(dangerRealClientIP, dt.Message.QueryAddress)
+
 			dtm.pseudonymizeDnstap(dt)
 
 			msg, timestamp := parsePacket(dt, isQuery)
@@ -905,7 +912,7 @@ minimiserLoop:
 
 			// We pass on the client address for cardinality
 			// measurements.
-			if wkdTracker.isKnown(dt.Message.QueryAddress, msg) {
+			if wkdTracker.isKnown(dangerRealClientIP, msg) {
 				if dtm.debug {
 					dtm.log.Debug("skipping well-known domain", "domain", msg.Question[0].Name)
 				}
