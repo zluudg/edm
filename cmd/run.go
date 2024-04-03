@@ -68,6 +68,8 @@ func init() {
 	runCmd.Flags().String("http-client-cert-file", "dtm-http-client.pem", "ECSDSA client cert used for authenticating to aggregate-receiver")
 	runCmd.Flags().String("http-url", "https://127.0.0.1:8443", "Service we will POST aggregates to")
 
+	runCmd.Flags().String("debug-dnstap-filename", "", "File for dumping JSON-formatted dnstap packets we are about to process, for debugging")
+
 	err := viper.BindPFlags(runCmd.Flags())
 	if err != nil {
 		log.Fatal(err)

@@ -566,7 +566,7 @@ func Run() {
 	}()
 
 	// Start minimiser
-	go dtm.runMinimiser(viper.GetString("well-known-domains"), viper.GetString("data-dir"), mqttPubCh, seenQnameLRU, pdb, viper.GetInt("new-qname-buffer"), aggregSender, autopahoCtx, autopahoCancel, viper.GetBool("disable-session-files"))
+	go dtm.runMinimiser(viper.GetString("well-known-domains"), viper.GetString("data-dir"), mqttPubCh, seenQnameLRU, pdb, viper.GetInt("new-qname-buffer"), aggregSender, autopahoCtx, autopahoCancel, viper.GetBool("disable-session-files"), viper.GetString("debug-dnstap-filename"))
 
 	// Start dnstap.Input
 	go dti.ReadInto(dtm.inputChannel)
@@ -798,7 +798,7 @@ func qnameSeen(dtm *dnstapMinimiser, msg *dns.Msg, seenQnameLRU *lru.Cache[strin
 // runMinimiser reads frames from the inputChannel, doing any modifications and
 // then passes them on to a dnstap.Output. To gracefully stop
 // runMinimiser() you need to close the dtm.stop channel.
-func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPubCh chan []byte, seenQnameLRU *lru.Cache[string, struct{}], pdb *pebble.DB, newQnameBuffer int, aggSender aggregateSender, autopahoCtx context.Context, autopahoCancel context.CancelFunc, disableSessionFiles bool) {
+func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPubCh chan []byte, seenQnameLRU *lru.Cache[string, struct{}], pdb *pebble.DB, newQnameBuffer int, aggSender aggregateSender, autopahoCtx context.Context, autopahoCancel context.CancelFunc, disableSessionFiles bool, debugDnstapFilename string) {
 
 	dnstapProcessed := promauto.NewCounter(prometheus.CounterOpts{
 		Name: "dtm_processed_dnstap_total",
@@ -867,6 +867,29 @@ func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPu
 
 	sessions := []*sessionData{}
 
+	// Keep in mind that this file is unbuffered. We could wrap it in a
+	// bufio.NewWriter() if we want more performance out of it, but since
+	// it is meant for debugging purposes it is probably better to keep it
+	// unbuffered and more "reactive". Otherwise it is hard to be sure if
+	// you are not seeing anything in the log because packets are being
+	// missed, or you are just waiting on the buffer to be flushed.
+	var debugDnstapFile *os.File
+	if debugDnstapFilename != "" {
+		// Make gosec happy
+		debugDnstapFilename := filepath.Clean(debugDnstapFilename)
+		debugDnstapFile, err = os.OpenFile(debugDnstapFilename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+		if err != nil {
+			dtm.log.Error("unable to open debug dnstap file", "error", err.Error(), "filename", debugDnstapFilename)
+			os.Exit(1)
+		}
+		defer func() {
+			err := debugDnstapFile.Close()
+			if err != nil {
+				dtm.log.Error("unable to close debug dnstap file", "error", err, "filename", debugDnstapFile.Name())
+			}
+		}()
+	}
+
 	ticker := time.NewTicker(timeUntilNextMinute())
 	defer ticker.Stop()
 
@@ -885,6 +908,18 @@ minimiserLoop:
 			// For now we only care about response type dnstap packets
 			if isQuery {
 				continue
+			}
+
+			if debugDnstapFile != nil {
+				out, ok := dnstap.JSONFormat(dt)
+				if !ok {
+					dtm.log.Error("unable to format dnstap debug log")
+				} else {
+					_, err := debugDnstapFile.Write(out)
+					if err != nil {
+						dtm.log.Error("unable to write to dnstap debug file", "error", err, "filename", debugDnstapFile.Name())
+					}
+				}
 			}
 
 			if dtm.debug {
