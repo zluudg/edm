@@ -117,7 +117,7 @@ type histogramData struct {
 	NXCount       int64   `parquet:"name=nx_count, type=INT64, convertedtype=UINT_64"`
 	FailCount     int64   `parquet:"name=fail_count, type=INT64, convertedtype=UINT_64"`
 	DTMStatusBits int64   `parquet:"name=dtm_status_bits, type=INT64, convertedtype=UINT_64"`
-	// The hll.HLL structs are not expected to be included in the output
+	// The hll.Hll structs are not expected to be included in the output
 	// parquet file, and thus do not need to be exported
 	v4ClientHLL           hll.Hll
 	v6ClientHLL           hll.Hll
