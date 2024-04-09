@@ -170,10 +170,29 @@ func setHistogramLabels(dtm *dnstapMinimiser, labels []string, labelLimit int, h
 
 	reverseLabels := reverseLabelsBounded(dtm, labels, labelLimit)
 
-	s := reflect.ValueOf(hd).Elem()
-
 	for index := range reverseLabels {
-		s.FieldByName("Label" + strconv.Itoa(index)).Set(reflect.ValueOf(&reverseLabels[index]))
+		switch index {
+		case 0:
+			hd.Label0 = &reverseLabels[index]
+		case 1:
+			hd.Label1 = &reverseLabels[index]
+		case 2:
+			hd.Label2 = &reverseLabels[index]
+		case 3:
+			hd.Label3 = &reverseLabels[index]
+		case 4:
+			hd.Label4 = &reverseLabels[index]
+		case 5:
+			hd.Label5 = &reverseLabels[index]
+		case 6:
+			hd.Label6 = &reverseLabels[index]
+		case 7:
+			hd.Label7 = &reverseLabels[index]
+		case 8:
+			hd.Label8 = &reverseLabels[index]
+		case 9:
+			hd.Label9 = &reverseLabels[index]
+		}
 	}
 
 	return hd
