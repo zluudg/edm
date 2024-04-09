@@ -2,6 +2,7 @@ package runner
 
 import (
 	"encoding/binary"
+	"flag"
 	"net/netip"
 	"os"
 	"strings"
@@ -12,7 +13,13 @@ import (
 	"github.com/smhanov/dawg"
 )
 
+var testDawg = flag.Bool("test-dawg", false, "perform tests requiring a well-known-domains.dawg file")
+
 func BenchmarkWKDTIsKnown(b *testing.B) {
+	if !*testDawg {
+		b.Skip("skipping benchmark needing well-known-domains.dawg")
+	}
+
 	dawgFile := "well-known-domains.dawg"
 
 	_, err := os.Stat(dawgFile)
@@ -50,6 +57,58 @@ func BenchmarkWKDTIsKnown(b *testing.B) {
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
 		wkdTracker.isKnown(ip.AsSlice(), m)
+	}
+}
+
+func BenchmarkSetHistogramLabels(b *testing.B) {
+	b.ReportAllocs()
+	labels := []string{"label0", "label1", "label2", "label3", "label4", "label5", "label6", "label7", "label8", "label9"}
+	dtm := &dnstapMinimiser{}
+	hd := &histogramData{}
+
+	for i := 0; i < b.N; i++ {
+		setHistogramLabels(dtm, labels, 10, hd)
+	}
+}
+
+func TestSetHistogramLabels(t *testing.T) {
+	// The reason the labels are "backwards" is because we define "label0"
+	// in the struct as the rightmost DNS label, e.g. "com", "net" etc.
+	labels := []string{"label9", "label8", "label7", "label6", "label5", "label4", "label3", "label2", "label1", "label0"}
+	dtm := &dnstapMinimiser{}
+	hd := &histogramData{}
+
+	setHistogramLabels(dtm, labels, 10, hd)
+
+	if *hd.Label0 != labels[9] {
+		t.Fatalf("have: %s, want: %s", *hd.Label0, labels[9])
+	}
+	if *hd.Label1 != labels[8] {
+		t.Fatalf("have: %s, want: %s", *hd.Label0, labels[8])
+	}
+	if *hd.Label2 != labels[7] {
+		t.Fatalf("have: %s, want: %s", *hd.Label0, labels[7])
+	}
+	if *hd.Label3 != labels[6] {
+		t.Fatalf("have: %s, want: %s", *hd.Label0, labels[6])
+	}
+	if *hd.Label4 != labels[5] {
+		t.Fatalf("have: %s, want: %s", *hd.Label0, labels[5])
+	}
+	if *hd.Label5 != labels[4] {
+		t.Fatalf("have: %s, want: %s", *hd.Label0, labels[4])
+	}
+	if *hd.Label6 != labels[3] {
+		t.Fatalf("have: %s, want: %s", *hd.Label0, labels[3])
+	}
+	if *hd.Label7 != labels[2] {
+		t.Fatalf("have: %s, want: %s", *hd.Label0, labels[2])
+	}
+	if *hd.Label8 != labels[1] {
+		t.Fatalf("have: %s, want: %s", *hd.Label0, labels[1])
+	}
+	if *hd.Label9 != labels[0] {
+		t.Fatalf("have: %s, want: %s", *hd.Label0, labels[0])
 	}
 }
 
