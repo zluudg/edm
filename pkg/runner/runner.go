@@ -160,11 +160,11 @@ type prevSessions struct {
 	rotationTime time.Time
 }
 
-func setHistogramLabels(dtm *dnstapMinimiser, labels []string, labelLimit int, hd *histogramData) *histogramData {
+func setHistogramLabels(dtm *dnstapMinimiser, labels []string, labelLimit int, hd *histogramData) {
 	// If labels is nil (the "." zone) we can depend on the zero type of
 	// the label fields being nil, so nothing to do
 	if labels == nil {
-		return hd
+		return
 	}
 
 	reverseLabels := reverseLabelsBounded(dtm, labels, labelLimit)
@@ -193,15 +193,13 @@ func setHistogramLabels(dtm *dnstapMinimiser, labels []string, labelLimit int, h
 			hd.Label9 = &reverseLabels[index]
 		}
 	}
-
-	return hd
 }
 
-func setSessionLabels(dtm *dnstapMinimiser, labels []string, labelLimit int, sd *sessionData) *sessionData {
+func setSessionLabels(dtm *dnstapMinimiser, labels []string, labelLimit int, sd *sessionData) {
 	// If labels is nil (the "." zone) we can depend on the zero type of
 	// the label fields being nil, so nothing to do
 	if labels == nil {
-		return sd
+		return
 	}
 
 	reverseLabels := reverseLabelsBounded(dtm, labels, labelLimit)
@@ -230,8 +228,6 @@ func setSessionLabels(dtm *dnstapMinimiser, labels []string, labelLimit int, sd 
 			sd.Label9 = &reverseLabels[index]
 		}
 	}
-
-	return sd
 }
 
 func reverseLabelsBounded(dtm *dnstapMinimiser, labels []string, maxLen int) []string {
