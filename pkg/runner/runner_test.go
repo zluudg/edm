@@ -112,6 +112,47 @@ func TestSetHistogramLabels(t *testing.T) {
 	}
 }
 
+func TestSetSessionLabels(t *testing.T) {
+	// The reason the labels are "backwards" is because we define "label0"
+	// in the struct as the rightmost DNS label, e.g. "com", "net" etc.
+	labels := []string{"label9", "label8", "label7", "label6", "label5", "label4", "label3", "label2", "label1", "label0"}
+	dtm := &dnstapMinimiser{}
+	sd := &sessionData{}
+
+	setSessionLabels(dtm, labels, 10, sd)
+
+	if *sd.Label0 != labels[9] {
+		t.Fatalf("have: %s, want: %s", *sd.Label0, labels[9])
+	}
+	if *sd.Label1 != labels[8] {
+		t.Fatalf("have: %s, want: %s", *sd.Label0, labels[8])
+	}
+	if *sd.Label2 != labels[7] {
+		t.Fatalf("have: %s, want: %s", *sd.Label0, labels[7])
+	}
+	if *sd.Label3 != labels[6] {
+		t.Fatalf("have: %s, want: %s", *sd.Label0, labels[6])
+	}
+	if *sd.Label4 != labels[5] {
+		t.Fatalf("have: %s, want: %s", *sd.Label0, labels[5])
+	}
+	if *sd.Label5 != labels[4] {
+		t.Fatalf("have: %s, want: %s", *sd.Label0, labels[4])
+	}
+	if *sd.Label6 != labels[3] {
+		t.Fatalf("have: %s, want: %s", *sd.Label0, labels[3])
+	}
+	if *sd.Label7 != labels[2] {
+		t.Fatalf("have: %s, want: %s", *sd.Label0, labels[2])
+	}
+	if *sd.Label8 != labels[1] {
+		t.Fatalf("have: %s, want: %s", *sd.Label0, labels[1])
+	}
+	if *sd.Label9 != labels[0] {
+		t.Fatalf("have: %s, want: %s", *sd.Label0, labels[0])
+	}
+}
+
 func TestDTMStatusBitsMulti(t *testing.T) {
 
 	expectedString := "well-known-exact|well-known-wildcard"

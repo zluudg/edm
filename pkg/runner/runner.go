@@ -23,7 +23,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -207,10 +206,29 @@ func setSessionLabels(dtm *dnstapMinimiser, labels []string, labelLimit int, sd 
 
 	reverseLabels := reverseLabelsBounded(dtm, labels, labelLimit)
 
-	s := reflect.ValueOf(sd).Elem()
-
 	for index := range reverseLabels {
-		s.FieldByName("Label" + strconv.Itoa(index)).Set(reflect.ValueOf(&reverseLabels[index]))
+		switch index {
+		case 0:
+			sd.Label0 = &reverseLabels[index]
+		case 1:
+			sd.Label1 = &reverseLabels[index]
+		case 2:
+			sd.Label2 = &reverseLabels[index]
+		case 3:
+			sd.Label3 = &reverseLabels[index]
+		case 4:
+			sd.Label4 = &reverseLabels[index]
+		case 5:
+			sd.Label5 = &reverseLabels[index]
+		case 6:
+			sd.Label6 = &reverseLabels[index]
+		case 7:
+			sd.Label7 = &reverseLabels[index]
+		case 8:
+			sd.Label8 = &reverseLabels[index]
+		case 9:
+			sd.Label9 = &reverseLabels[index]
+		}
 	}
 
 	return sd
