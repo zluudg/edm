@@ -3,14 +3,19 @@ package runner
 import (
 	"encoding/binary"
 	"flag"
+	"io"
+	"log/slog"
 	"net/netip"
 	"os"
 	"strings"
 	"testing"
 
+	dnstap "github.com/dnstap/golang-dnstap"
+	"github.com/fsnotify/fsnotify"
 	"github.com/miekg/dns"
 	"github.com/segmentio/go-hll"
 	"github.com/smhanov/dawg"
+	"golang.org/x/crypto/argon2"
 )
 
 var testDawg = flag.Bool("test-dawg", false, "perform tests requiring a well-known-domains.dawg file")
@@ -256,5 +261,171 @@ func TestDTMIP6BytesToInt(t *testing.T) {
 
 	if ip6Addr != constructedIp6Addr {
 		t.Fatalf("have: %s, want: %s", constructedIp6Addr, ip6Addr)
+	}
+}
+
+func TestPseudonymiseDnstap(t *testing.T) {
+	// Dont output logging
+	// https://github.com/golang/go/issues/62005
+	discardLogger := slog.NewTextHandler(io.Discard, nil)
+	logger := slog.New(discardLogger)
+
+	cryptopanSalt := "aabbccddeeffgghh"
+
+	aesKey := argon2.IDKey([]byte("key1"), []byte(cryptopanSalt), 1, 64*1024, 4, 32)
+
+	// The original addresses we want to pseudonymise
+	origQueryAddr4 := netip.MustParseAddr("198.51.100.20")
+	origRespAddr4 := netip.MustParseAddr("198.51.100.30")
+	origQueryAddr6 := netip.MustParseAddr("2001:db8:1122:3344:5566:7788:99aa:bbcc")
+	origRespAddr6 := netip.MustParseAddr("2001:db8:1122:3344:5566:7788:99aa:ddee")
+
+	// The expected result given our first and second keys
+	expectedPseudoQueryAddr4 := netip.MustParseAddr("58.92.11.53")
+	expectedPseudoRespAddr4 := netip.MustParseAddr("58.92.11.62")
+	expectedPseudoQueryAddrUpdated4 := netip.MustParseAddr("185.204.164.235")
+	expectedPseudoRespAddrUpdated4 := netip.MustParseAddr("185.204.164.225")
+
+	expectedPseudoQueryAddr6 := netip.MustParseAddr("b780:8dc8:6ed9:cbc5:4d61:a6bb:6255:5a03")
+	expectedPseudoRespAddr6 := netip.MustParseAddr("b780:8dc8:6ed9:cbc5:4d61:a6bb:6255:262d")
+	expectedPseudoQueryAddrUpdated6 := netip.MustParseAddr("3f29:478:21d2:2c44:6915:7ca7:8654:aa28")
+	expectedPseudoRespAddrUpdated6 := netip.MustParseAddr("3f29:478:21d2:2c44:6915:7ca7:8654:d21f")
+
+	dt4 := &dnstap.Dnstap{
+		Message: &dnstap.Message{
+			QueryAddress:    origQueryAddr4.AsSlice(),
+			ResponseAddress: origRespAddr4.AsSlice(),
+		},
+	}
+	dt6 := &dnstap.Dnstap{
+		Message: &dnstap.Message{
+			QueryAddress:    origQueryAddr6.AsSlice(),
+			ResponseAddress: origRespAddr6.AsSlice(),
+		},
+	}
+
+	dtm, err := newDnstapMinimiser(logger, aesKey, false)
+	if err != nil {
+		t.Fatalf("unable to setup dtm: %s", err)
+	}
+
+	dtm.pseudonymiseDnstap(dt4)
+	dtm.pseudonymiseDnstap(dt6)
+
+	pseudoQueryAddr4, ok := netip.AddrFromSlice(dt4.Message.QueryAddress)
+	if !ok {
+		t.Fatal("unable to parse IPv4 QueryAddress")
+	}
+	pseudoRespAddr4, ok := netip.AddrFromSlice(dt4.Message.ResponseAddress)
+	if !ok {
+		t.Fatal("unable to parse IPv4 ResponseAddress")
+	}
+
+	pseudoQueryAddr6, ok := netip.AddrFromSlice(dt6.Message.QueryAddress)
+	if !ok {
+		t.Fatal("unable to parse IPv6 QueryAddress")
+	}
+	pseudoRespAddr6, ok := netip.AddrFromSlice(dt6.Message.ResponseAddress)
+	if !ok {
+		t.Fatal("unable to parse IPv6 ResponseAddress")
+	}
+
+	// Verify they are different from the original addresses
+	if origQueryAddr4 == pseudoQueryAddr4 {
+		t.Fatalf("pseudonymised IPv4 query address %s is the same as the orignal address %s", pseudoQueryAddr4, origQueryAddr4)
+	}
+	if origRespAddr4 == pseudoRespAddr4 {
+		t.Fatalf("pseudonymised IPv4 response address %s is the same as the orignal address %s", pseudoRespAddr4, origRespAddr4)
+	}
+	if origQueryAddr6 == pseudoQueryAddr6 {
+		t.Fatalf("pseudonymised IPv6 query address %s is the same as the orignal address %s", pseudoQueryAddr6, origQueryAddr6)
+	}
+	if origRespAddr6 == pseudoRespAddr6 {
+		t.Fatalf("pseudonymised IPv6 response address %s is the same as the orignal address %s", pseudoRespAddr6, origRespAddr6)
+	}
+
+	// Verify they are different as expected
+	if pseudoQueryAddr4 != expectedPseudoQueryAddr4 {
+		t.Fatalf("pseudonymised IPv4 query address %s is not the expected address %s", pseudoQueryAddr4, expectedPseudoQueryAddr4)
+	}
+	if pseudoRespAddr4 != expectedPseudoRespAddr4 {
+		t.Fatalf("pseudonymised IPv4 resp address %s is not the expected address %s", pseudoRespAddr4, expectedPseudoRespAddr4)
+	}
+	if pseudoQueryAddr6 != expectedPseudoQueryAddr6 {
+		t.Fatalf("pseudonymised IPv6 query address %s is not the expected address %s", pseudoQueryAddr6, expectedPseudoQueryAddr6)
+	}
+	if pseudoRespAddr6 != expectedPseudoRespAddr6 {
+		t.Fatalf("pseudonymised IPv6 resp address %s is not the expected address %s", pseudoRespAddr6, expectedPseudoRespAddr6)
+	}
+
+	// Replace the cryptopan instance and verify we now get different pseudonymised results
+	setCryptopan(dtm, fsnotify.Event{Name: "TestPseudonymiseDnstap"}, "key2", cryptopanSalt)
+
+	// Reset the addresses and pseudonymise again with the updated key
+	dt4.Message.QueryAddress = origQueryAddr4.AsSlice()
+	dt4.Message.ResponseAddress = origRespAddr4.AsSlice()
+	dt6.Message.QueryAddress = origQueryAddr6.AsSlice()
+	dt6.Message.ResponseAddress = origRespAddr6.AsSlice()
+
+	dtm.pseudonymiseDnstap(dt4)
+	dtm.pseudonymiseDnstap(dt6)
+
+	pseudoQueryAddrUpdated4, ok := netip.AddrFromSlice(dt4.Message.QueryAddress)
+	if !ok {
+		t.Fatal("unable to parse second IPv4 QueryAddress")
+	}
+	pseudoRespAddrUpdated4, ok := netip.AddrFromSlice(dt4.Message.ResponseAddress)
+	if !ok {
+		t.Fatal("unable to parse second IPv4 ResponseAddress")
+	}
+	pseudoQueryAddrUpdated6, ok := netip.AddrFromSlice(dt6.Message.QueryAddress)
+	if !ok {
+		t.Fatal("unable to parse second IPv6 QueryAddress")
+	}
+	pseudoRespAddrUpdated6, ok := netip.AddrFromSlice(dt6.Message.ResponseAddress)
+	if !ok {
+		t.Fatal("unable to parse second IPv6 ResponseAddress")
+	}
+
+	// Verify they are different from the original addresses
+	if origQueryAddr4 == pseudoQueryAddrUpdated4 {
+		t.Fatalf("updated pseudonymised IPv4 query address %s is the same as the orignal address %s", pseudoQueryAddrUpdated4, origQueryAddr4)
+	}
+	if origRespAddr4 == pseudoRespAddrUpdated4 {
+		t.Fatalf("updated pseudonymised IPv4 response address %s is the same as the orignal address %s", pseudoRespAddrUpdated4, origRespAddr4)
+	}
+	if origQueryAddr6 == pseudoQueryAddrUpdated6 {
+		t.Fatalf("updated pseudonymised IPv6 query address %s is the same as the orignal address %s", pseudoQueryAddrUpdated6, origQueryAddr6)
+	}
+	if origRespAddr4 == pseudoRespAddrUpdated4 {
+		t.Fatalf("updated pseudonymised IPv6 response address %s is the same as the orignal address %s", pseudoRespAddrUpdated6, origRespAddr6)
+	}
+
+	// Verify the new pseudo addresses are different from the previous pseudo addresses
+	if pseudoQueryAddr4 == pseudoQueryAddrUpdated4 {
+		t.Fatalf("updated pseudonymised IPv4 query address %s is the same as the orignal pseudonymised address %s", pseudoQueryAddrUpdated4, pseudoQueryAddr4)
+	}
+	if pseudoRespAddr4 == pseudoRespAddrUpdated4 {
+		t.Fatalf("updated pseudonymised IPv4 response address %s is the same as the orignal pseudonymised address %s", pseudoRespAddrUpdated4, pseudoRespAddr4)
+	}
+	if pseudoQueryAddr6 == pseudoQueryAddrUpdated6 {
+		t.Fatalf("updated pseudonymised IPv6 query address %s is the same as the orignal pseudonymised address %s", pseudoQueryAddrUpdated6, pseudoQueryAddr6)
+	}
+	if pseudoRespAddr6 == pseudoRespAddrUpdated6 {
+		t.Fatalf("updated pseudonymised IPv6 response address %s is the same as the orignal pseudonymised address %s", pseudoRespAddrUpdated6, pseudoRespAddr6)
+	}
+
+	// Verify they are different as expected
+	if pseudoQueryAddrUpdated4 != expectedPseudoQueryAddrUpdated4 {
+		t.Fatalf("updated pseudonymised IPv4 query address %s is not the expected address %s", pseudoQueryAddrUpdated4, expectedPseudoQueryAddrUpdated4)
+	}
+	if pseudoRespAddrUpdated4 != expectedPseudoRespAddrUpdated4 {
+		t.Fatalf("updated pseudonymised IPv4 resp address %s is not the expected address %s", pseudoRespAddrUpdated4, expectedPseudoRespAddrUpdated4)
+	}
+	if pseudoQueryAddrUpdated6 != expectedPseudoQueryAddrUpdated6 {
+		t.Fatalf("updated pseudonymised IPv6 query address %s is not the expected address %s", pseudoQueryAddrUpdated6, expectedPseudoQueryAddrUpdated6)
+	}
+	if pseudoRespAddrUpdated6 != expectedPseudoRespAddrUpdated6 {
+		t.Fatalf("updated pseudonymised IPv6 resp address %s is not the expected address %s", pseudoRespAddrUpdated6, expectedPseudoRespAddrUpdated6)
 	}
 }

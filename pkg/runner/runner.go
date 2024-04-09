@@ -328,12 +328,12 @@ timerLoop:
 	dtm.log.Info("exiting diskCleaner loop")
 }
 
-func setCryptopan(dtm *dnstapMinimiser, e fsnotify.Event) {
+func setCryptopan(dtm *dnstapMinimiser, e fsnotify.Event, key string, salt string) {
 
 	dtm.log.Info("setCryptopan: reacting to config file update", "filename", e.Name)
 
 	var aesKeyLen uint32 = 32
-	aesKey := argon2.IDKey([]byte(viper.GetString("cryptopan-key")), []byte(viper.GetString("cryptopan-key-salt")), 1, 64*1024, 4, aesKeyLen)
+	aesKey := argon2.IDKey([]byte(key), []byte(salt), 1, 64*1024, 4, aesKeyLen)
 
 	cpn, err := cryptopan.New(aesKey)
 	if err != nil {
@@ -364,7 +364,7 @@ func configUpdater(viperNotifyCh chan fsnotify.Event, dtm *dnstapMinimiser) {
 	// Start with creating a timer that will call the update function in the
 	// future but stop it so it never runs by default.
 	var e fsnotify.Event
-	t := time.AfterFunc(math.MaxInt64, func() { setCryptopan(dtm, e) })
+	t := time.AfterFunc(math.MaxInt64, func() { setCryptopan(dtm, e, viper.GetString("cryptopan-key"), viper.GetString("cryptopan-key-salt")) })
 	t.Stop()
 
 	for e = range viperNotifyCh {
