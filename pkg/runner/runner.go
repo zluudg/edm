@@ -986,7 +986,7 @@ minimiserLoop:
 
 			dtm.pseudonymiseDnstap(dt)
 
-			msg, timestamp := parsePacket(dt, isQuery)
+			msg, timestamp := dtm.parsePacket(dt, isQuery)
 
 			// Create a less specific timestamp for data sent to
 			// core to make precise tracking harder.
@@ -1365,7 +1365,7 @@ func newQnamePublisher(dtm *dnstapMinimiser, inputCh chan *protocols.EventsMqttM
 	dtm.log.Info("newQnamePublisher: exiting loop")
 }
 
-func parsePacket(dt *dnstap.Dnstap, isQuery bool) (*dns.Msg, time.Time) {
+func (dtm *dnstapMinimiser) parsePacket(dt *dnstap.Dnstap, isQuery bool) (*dns.Msg, time.Time) {
 	var t time.Time
 	var err error
 	var queryAddress, responseAddress string
@@ -1390,14 +1390,14 @@ func parsePacket(dt *dnstap.Dnstap, isQuery bool) (*dns.Msg, time.Time) {
 	if isQuery {
 		err = msg.Unpack(dt.Message.QueryMessage)
 		if err != nil {
-			log.Printf("unable to unpack query message (%s -> %s): %s", queryAddress, responseAddress, err)
+			dtm.log.Error("unable to unpack query message", "error", err, "query_address", queryAddress, "response_address", responseAddress)
 			msg = nil
 		}
 		t = time.Unix(int64(*dt.Message.QueryTimeSec), int64(*dt.Message.QueryTimeNsec))
 	} else {
 		err = msg.Unpack(dt.Message.ResponseMessage)
 		if err != nil {
-			log.Printf("unable to unpack response message (%s <- %s): %s", queryAddress, responseAddress, err)
+			dtm.log.Error("unable to unpack response message", "error", err, "query_address", queryAddress, "response_address", responseAddress)
 			msg = nil
 		}
 		t = time.Unix(int64(*dt.Message.ResponseTimeSec), int64(*dt.Message.ResponseTimeNsec))
