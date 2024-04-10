@@ -635,6 +635,10 @@ type dnstapMinimiser struct {
 	cryptopanCache        *lru.Cache[netip.Addr, netip.Addr]
 	cryptopanCacheHit     prometheus.Counter
 	cryptopanCacheEvicted prometheus.Counter
+	dnstapProcessed       prometheus.Counter
+	newQnameQueued        prometheus.Counter
+	newQnameDiscarded     prometheus.Counter
+	seenQnameLRUEvicted   prometheus.Counter
 	stop                  chan struct{} // close this channel to gracefully stop runMinimiser()
 	done                  chan struct{} // block on this channel to make sure output is flushed before exiting
 	debug                 bool          // if we should print debug messages during operation
@@ -669,6 +673,26 @@ func newDnstapMinimiser(logger *slog.Logger, cryptopanKey string, cryptopanSalt 
 	dtm.cryptopanCacheEvicted = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "dtm_cryptopan_lru_evicted_total",
 		Help: "The total number of times something was evicted from the cryptopan address LRU cache",
+	})
+
+	dtm.dnstapProcessed = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "dtm_processed_dnstap_total",
+		Help: "The total number of processed dnstap packets",
+	})
+
+	dtm.newQnameQueued = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "dtm_new_qname_queued_total",
+		Help: "The total number of queued new_qname events",
+	})
+
+	dtm.newQnameDiscarded = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "dtm_new_qname_discarded_total",
+		Help: "The total number of discarded new_qname events",
+	})
+
+	dtm.seenQnameLRUEvicted = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "dtm_seen_qname_lru_evicted_total",
+		Help: "The total number of times something was evicted from the new_qname LRU cache",
 	})
 
 	dtm.stop = make(chan struct{})
@@ -826,7 +850,7 @@ func (wkd *wellKnownDomainsTracker) rotateTracker(dawgFile string, rotationTime 
 }
 
 // Check if we have already seen this qname since we started.
-func qnameSeen(dtm *dnstapMinimiser, msg *dns.Msg, seenQnameLRU *lru.Cache[string, struct{}], seenQnameLRUEvicted prometheus.Counter, pdb *pebble.DB) bool {
+func qnameSeen(dtm *dnstapMinimiser, msg *dns.Msg, seenQnameLRU *lru.Cache[string, struct{}], pdb *pebble.DB) bool {
 	// NOTE: This looks like it might be a race (calling
 	// Get() followed by separate Add()) but since we want
 	// to keep often looked-up names in the cache we need to
@@ -844,7 +868,7 @@ func qnameSeen(dtm *dnstapMinimiser, msg *dns.Msg, seenQnameLRU *lru.Cache[strin
 	// Add it to the LRU
 	evicted := seenQnameLRU.Add(msg.Question[0].Name, struct{}{})
 	if evicted {
-		seenQnameLRUEvicted.Inc()
+		dtm.seenQnameLRUEvicted.Inc()
 	}
 
 	// It was not in the LRU cache, does it exist in pebble (on disk)?
@@ -874,26 +898,6 @@ func qnameSeen(dtm *dnstapMinimiser, msg *dns.Msg, seenQnameLRU *lru.Cache[strin
 // then passes them on to a dnstap.Output. To gracefully stop
 // runMinimiser() you need to close the dtm.stop channel.
 func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPubCh chan []byte, seenQnameLRU *lru.Cache[string, struct{}], pdb *pebble.DB, newQnameBuffer int, aggSender aggregateSender, autopahoCtx context.Context, autopahoCancel context.CancelFunc, disableSessionFiles bool, debugDnstapFilename string) {
-
-	dnstapProcessed := promauto.NewCounter(prometheus.CounterOpts{
-		Name: "dtm_processed_dnstap_total",
-		Help: "The total number of processed dnstap packets",
-	})
-
-	newQnameQueued := promauto.NewCounter(prometheus.CounterOpts{
-		Name: "dtm_new_qname_queued_total",
-		Help: "The total number of queued new_qname events",
-	})
-
-	newQnameDiscarded := promauto.NewCounter(prometheus.CounterOpts{
-		Name: "dtm_new_qname_discarded_total",
-		Help: "The total number of discarded new_qname events",
-	})
-
-	seenQnameLRUEvicted := promauto.NewCounter(prometheus.CounterOpts{
-		Name: "dtm_seen_qname_lru_evicted_total",
-		Help: "The total number of times something was evicted from the new_qname LRU cache",
-	})
 
 	dt := &dnstap.Dnstap{}
 
@@ -972,7 +976,7 @@ minimiserLoop:
 	for {
 		select {
 		case frame := <-dtm.inputChannel:
-			dnstapProcessed.Inc()
+			dtm.dnstapProcessed.Inc()
 			if err := proto.Unmarshal(frame, dt); err != nil {
 				dtm.log.Error("dnstapMinimiser.runMinimiser: proto.Unmarshal() failed, returning", "error", err)
 				break minimiserLoop
@@ -1036,16 +1040,16 @@ minimiserLoop:
 				continue
 			}
 
-			if !qnameSeen(dtm, msg, seenQnameLRU, seenQnameLRUEvicted, pdb) {
+			if !qnameSeen(dtm, msg, seenQnameLRU, pdb) {
 				newQname := protocols.NewQnameEvent(msg, truncatedTimestamp)
 
 				// If the queue is full we skip sending new_qname events on the bus
 				select {
 				case newQnamePublisherCh <- &newQname:
-					newQnameQueued.Inc()
+					dtm.newQnameQueued.Inc()
 				default:
 					// If the publisher channel is full we skip creating an event.
-					newQnameDiscarded.Inc()
+					dtm.newQnameDiscarded.Inc()
 				}
 			}
 
