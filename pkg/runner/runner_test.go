@@ -383,6 +383,10 @@ func TestPseudonymiseDnstap(t *testing.T) {
 		t.Fatalf("unable to setup dtm: %s", err)
 	}
 
+	if dtm.cryptopanCache.Len() != 0 {
+		t.Fatalf("there should be no entries in newly initialised cryptopan cache but it contains items: %d", dtm.cryptopanCache.Len())
+	}
+
 	dtm.pseudonymiseDnstap(dt4)
 	dtm.pseudonymiseDnstap(dt6)
 
@@ -432,10 +436,18 @@ func TestPseudonymiseDnstap(t *testing.T) {
 		t.Fatalf("pseudonymised IPv6 resp address %s is not the expected address %s", pseudoRespAddr6, expectedPseudoRespAddr6)
 	}
 
+	if dtm.cryptopanCache.Len() == 0 {
+		t.Fatalf("there should be entries in the cryptopan cache but it is empty")
+	}
+
 	// Replace the cryptopan instance and verify we now get different pseudonymised results
 	err = dtm.setCryptopan("key2", cryptopanSalt, cryptopanCacheSize)
 	if err != nil {
-		t.Fatalf("unavle to call dtm.SetCryptopan: %s", err)
+		t.Fatalf("unable to call dtm.SetCryptopan: %s", err)
+	}
+
+	if dtm.cryptopanCache.Len() != 0 {
+		t.Fatalf("there should be no cache entries in replaced cryptopan cache but it contains items: %d", dtm.cryptopanCache.Len())
 	}
 
 	// Reset the addresses and pseudonymise again with the updated key
