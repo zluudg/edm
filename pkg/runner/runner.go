@@ -1722,10 +1722,10 @@ func (dtm *dnstapMinimiser) pseudonymiseIP(ipBytes []byte) ([]byte, error) {
 		// the contained junk is somehow sensitive
 		return make([]byte, len(ipBytes)), errors.New("unable to parse addr")
 	} else {
-		anonymisedAddr, ok := dtm.cryptopanCache.Get(addr)
+		pseudonymisedAddr, ok := dtm.cryptopanCache.Get(addr)
 		if !ok {
 			// Not in cache, calculate the pseudonymised IP
-			anonymisedAddr, ok = netip.AddrFromSlice(dtm.cryptopan.Anonymize(addr.AsSlice()))
+			pseudonymisedAddr, ok = netip.AddrFromSlice(dtm.cryptopan.Anonymize(addr.AsSlice()))
 			if !ok {
 				// Replace address with zeroes here as well
 				// since we do not know if the contained junk
@@ -1733,7 +1733,7 @@ func (dtm *dnstapMinimiser) pseudonymiseIP(ipBytes []byte) ([]byte, error) {
 				return make([]byte, len(ipBytes)), errors.New("unable to anonymise addr")
 			}
 
-			evicted := dtm.cryptopanCache.Add(addr, anonymisedAddr)
+			evicted := dtm.cryptopanCache.Add(addr, pseudonymisedAddr)
 			if evicted {
 				dtm.cryptopanCacheEvicted.Inc()
 			}
@@ -1744,7 +1744,7 @@ func (dtm *dnstapMinimiser) pseudonymiseIP(ipBytes []byte) ([]byte, error) {
 		// meaning we will get IPv4 addresses mapped to IPv6, e.g.
 		// ::ffff:127.0.0.1. It is easier to handle these as native
 		// IPv4 addresses in our system so call Unmap() on it.
-		return anonymisedAddr.Unmap().AsSlice(), nil
+		return pseudonymisedAddr.Unmap().AsSlice(), nil
 	}
 }
 
