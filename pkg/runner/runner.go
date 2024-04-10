@@ -350,7 +350,7 @@ func (dtm *dnstapMinimiser) setCryptopan(key string, salt string, cacheEntries i
 
 	cpn, err := createCryptopan(key, salt)
 	if err != nil {
-		return err
+		return fmt.Errorf("setCryptopan: unable to create cryptopan: %w", err)
 	}
 
 	dtm.mutex.Lock()
