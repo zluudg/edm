@@ -28,7 +28,7 @@ type aggregateSender struct {
 	signingHttpClient *httpsign.Client
 }
 
-func newAggregateSender(dtm *dnstapMinimiser, aggrecURL *url.URL, signingKeyName string, signingKey *ecdsa.PrivateKey, caCertPool *x509.CertPool, clientCert tls.Certificate) aggregateSender {
+func (dtm *dnstapMinimiser) newAggregateSender(aggrecURL *url.URL, signingKeyName string, signingKey *ecdsa.PrivateKey, caCertPool *x509.CertPool, clientCert tls.Certificate) aggregateSender {
 	// Create HTTP handler for sending aggregate files to aggrec
 	httpClient := http.Client{
 		Transport: &http.Transport{

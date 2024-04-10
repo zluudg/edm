@@ -160,14 +160,14 @@ type prevSessions struct {
 	rotationTime time.Time
 }
 
-func setHistogramLabels(dtm *dnstapMinimiser, labels []string, labelLimit int, hd *histogramData) {
+func (dtm *dnstapMinimiser) setHistogramLabels(labels []string, labelLimit int, hd *histogramData) {
 	// If labels is nil (the "." zone) we can depend on the zero type of
 	// the label fields being nil, so nothing to do
 	if labels == nil {
 		return
 	}
 
-	reverseLabels := reverseLabelsBounded(dtm, labels, labelLimit)
+	reverseLabels := dtm.reverseLabelsBounded(labels, labelLimit)
 
 	for index := range reverseLabels {
 		switch index {
@@ -195,14 +195,14 @@ func setHistogramLabels(dtm *dnstapMinimiser, labels []string, labelLimit int, h
 	}
 }
 
-func setSessionLabels(dtm *dnstapMinimiser, labels []string, labelLimit int, sd *sessionData) {
+func (dtm *dnstapMinimiser) setSessionLabels(labels []string, labelLimit int, sd *sessionData) {
 	// If labels is nil (the "." zone) we can depend on the zero type of
 	// the label fields being nil, so nothing to do
 	if labels == nil {
 		return
 	}
 
-	reverseLabels := reverseLabelsBounded(dtm, labels, labelLimit)
+	reverseLabels := dtm.reverseLabelsBounded(labels, labelLimit)
 
 	for index := range reverseLabels {
 		switch index {
@@ -230,7 +230,7 @@ func setSessionLabels(dtm *dnstapMinimiser, labels []string, labelLimit int, sd 
 	}
 }
 
-func reverseLabelsBounded(dtm *dnstapMinimiser, labels []string, maxLen int) []string {
+func (dtm *dnstapMinimiser) reverseLabelsBounded(labels []string, maxLen int) []string {
 	// If labels is nil (the "." zone) there is nothing to do
 	if labels == nil {
 		return nil
@@ -277,7 +277,7 @@ func reverseLabelsBounded(dtm *dnstapMinimiser, labels []string, maxLen int) []s
 	return boundedReverseLabels
 }
 
-func diskCleaner(dtm *dnstapMinimiser, wg *sync.WaitGroup, sentDir string) {
+func (dtm *dnstapMinimiser) diskCleaner(wg *sync.WaitGroup, sentDir string) {
 	// We will scan the directory each tick for sent files to remove.
 	wg.Add(1)
 	defer wg.Done()
@@ -494,7 +494,7 @@ func Run() {
 		}
 	}()
 
-	autopahoConfig, err := newAutoPahoClientConfig(dtm, mqttCACertPool, viper.GetString("mqtt-server"), viper.GetString("mqtt-client-id"), mqttClientCert, uint16(viper.GetInt("mqtt-keepalive")))
+	autopahoConfig, err := dtm.newAutoPahoClientConfig(mqttCACertPool, viper.GetString("mqtt-server"), viper.GetString("mqtt-client-id"), mqttClientCert, uint16(viper.GetInt("mqtt-keepalive")))
 	if err != nil {
 		logger.Error("unable to create autopaho config", "error", err)
 		os.Exit(1)
@@ -589,7 +589,7 @@ func Run() {
 		os.Exit(1)
 	}
 
-	aggregSender := newAggregateSender(dtm, httpURL, viper.GetString("http-signing-key-id"), httpSigningKey, httpCACertPool, httpClientCert)
+	aggregSender := dtm.newAggregateSender(httpURL, viper.GetString("http-signing-key-id"), httpSigningKey, httpCACertPool, httpClientCert)
 
 	// Exit gracefully on SIGINT or SIGTERM
 	go func() {
@@ -850,7 +850,7 @@ func (wkd *wellKnownDomainsTracker) rotateTracker(dawgFile string, rotationTime 
 }
 
 // Check if we have already seen this qname since we started.
-func qnameSeen(dtm *dnstapMinimiser, msg *dns.Msg, seenQnameLRU *lru.Cache[string, struct{}], pdb *pebble.DB) bool {
+func (dtm *dnstapMinimiser) qnameSeen(msg *dns.Msg, seenQnameLRU *lru.Cache[string, struct{}], pdb *pebble.DB) bool {
 	// NOTE: This looks like it might be a race (calling
 	// Get() followed by separate Add()) but since we want
 	// to keep often looked-up names in the cache we need to
@@ -924,13 +924,13 @@ func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPu
 	sentDir := filepath.Join(dataDir, "parquet", "histograms", "sent")
 
 	// Start record writers and data senders in the background
-	go sessionWriter(dtm, sessionWriterCh, dataDir, &wg)
-	go histogramWriter(dtm, histogramWriterCh, labelLimit, outboxDir, &wg)
-	go histogramSender(dtm, outboxDir, sentDir, aggSender, &wg)
-	go newQnamePublisher(dtm, newQnamePublisherCh, mqttPubCh, &wg, autopahoCtx)
+	go dtm.sessionWriter(sessionWriterCh, dataDir, &wg)
+	go dtm.histogramWriter(histogramWriterCh, labelLimit, outboxDir, &wg)
+	go dtm.histogramSender(outboxDir, sentDir, aggSender, &wg)
+	go dtm.newQnamePublisher(newQnamePublisherCh, mqttPubCh, &wg, autopahoCtx)
 
 	go monitorChannelLen(newQnamePublisherCh)
-	go diskCleaner(dtm, &wg, sentDir)
+	go dtm.diskCleaner(&wg, sentDir)
 
 	dawgFinder, err := dawg.Load(dawgFile)
 	if err != nil {
@@ -1040,7 +1040,7 @@ minimiserLoop:
 				continue
 			}
 
-			if !qnameSeen(dtm, msg, seenQnameLRU, pdb) {
+			if !dtm.qnameSeen(msg, seenQnameLRU, pdb) {
 				newQname := protocols.NewQnameEvent(msg, truncatedTimestamp)
 
 				// If the queue is full we skip sending new_qname events on the bus
@@ -1054,7 +1054,7 @@ minimiserLoop:
 			}
 
 			if !disableSessionFiles {
-				session := newSession(dtm, dt, msg, isQuery, labelLimit, timestamp)
+				session := dtm.newSession(dt, msg, isQuery, labelLimit, timestamp)
 
 				sessions = append(sessions, session)
 
@@ -1126,7 +1126,7 @@ func monitorChannelLen(newQnamePublisherCh chan *protocols.EventsMqttMessageNewQ
 	}
 }
 
-func newSession(dtm *dnstapMinimiser, dt *dnstap.Dnstap, msg *dns.Msg, isQuery bool, labelLimit int, timestamp time.Time) *sessionData {
+func (dtm *dnstapMinimiser) newSession(dt *dnstap.Dnstap, msg *dns.Msg, isQuery bool, labelLimit int, timestamp time.Time) *sessionData {
 	sd := &sessionData{}
 
 	if dt.Message.QueryPort != nil {
@@ -1139,7 +1139,7 @@ func newSession(dtm *dnstapMinimiser, dt *dnstap.Dnstap, msg *dns.Msg, isQuery b
 		sd.DestPort = &rp
 	}
 
-	setSessionLabels(dtm, dns.SplitDomainName(msg.Question[0].Name), labelLimit, sd)
+	dtm.setSessionLabels(dns.SplitDomainName(msg.Question[0].Name), labelLimit, sd)
 
 	if isQuery {
 		qms := string(dt.Message.QueryMessage)
@@ -1214,11 +1214,11 @@ func newSession(dtm *dnstapMinimiser, dt *dnstap.Dnstap, msg *dns.Msg, isQuery b
 	return sd
 }
 
-func sessionWriter(dtm *dnstapMinimiser, ch chan *prevSessions, dataDir string, wg *sync.WaitGroup) {
+func (dtm *dnstapMinimiser) sessionWriter(ch chan *prevSessions, dataDir string, wg *sync.WaitGroup) {
 	wg.Add(1)
 	defer wg.Done()
 	for ps := range ch {
-		err := writeSessionParquet(dtm, ps, dataDir)
+		err := dtm.writeSessionParquet(ps, dataDir)
 		if err != nil {
 			dtm.log.Error("sessionWriter", "error", err.Error())
 		}
@@ -1227,11 +1227,11 @@ func sessionWriter(dtm *dnstapMinimiser, ch chan *prevSessions, dataDir string, 
 	dtm.log.Info("sessionStructWriter: exiting loop")
 }
 
-func histogramWriter(dtm *dnstapMinimiser, ch chan *wellKnownDomainsData, labelLimit int, outboxDir string, wg *sync.WaitGroup) {
+func (dtm *dnstapMinimiser) histogramWriter(ch chan *wellKnownDomainsData, labelLimit int, outboxDir string, wg *sync.WaitGroup) {
 	wg.Add(1)
 	defer wg.Done()
 	for prevWellKnownDomainsData := range ch {
-		err := writeHistogramParquet(dtm, prevWellKnownDomainsData, labelLimit, outboxDir)
+		err := dtm.writeHistogramParquet(prevWellKnownDomainsData, labelLimit, outboxDir)
 		if err != nil {
 			dtm.log.Error("histogramWriter", "error", err.Error())
 		}
@@ -1240,7 +1240,7 @@ func histogramWriter(dtm *dnstapMinimiser, ch chan *wellKnownDomainsData, labelL
 	dtm.log.Info("histogramWriter: exiting loop")
 }
 
-func renameFile(dtm *dnstapMinimiser, src string, dst string) error {
+func (dtm *dnstapMinimiser) renameFile(src string, dst string) error {
 	dstDir := filepath.Dir(dst)
 
 	// We are prepared for the destination directory not existing and will
@@ -1268,7 +1268,7 @@ func renameFile(dtm *dnstapMinimiser, src string, dst string) error {
 	}
 }
 
-func createFile(dtm *dnstapMinimiser, dst string) (*os.File, error) {
+func (dtm *dnstapMinimiser) createFile(dst string) (*os.File, error) {
 	dstDir := filepath.Dir(dst)
 
 	// Make gosec happy
@@ -1299,7 +1299,7 @@ func createFile(dtm *dnstapMinimiser, dst string) (*os.File, error) {
 	}
 }
 
-func histogramSender(dtm *dnstapMinimiser, outboxDir string, sentDir string, aggSender aggregateSender, wg *sync.WaitGroup) {
+func (dtm *dnstapMinimiser) histogramSender(outboxDir string, sentDir string, aggSender aggregateSender, wg *sync.WaitGroup) {
 	wg.Add(1)
 	defer wg.Done()
 
@@ -1339,7 +1339,7 @@ timerLoop:
 					if err != nil {
 						dtm.log.Error("histogramSender: unable to send histogram file", "error", err)
 					}
-					err = renameFile(dtm, absPath, absPathSent)
+					err = dtm.renameFile(absPath, absPathSent)
 					if err != nil {
 						dtm.log.Error("histogramSender: unable to rename sent histogram file", "error", err)
 					}
@@ -1369,7 +1369,7 @@ func timestampsFromFilename(name string) (time.Time, time.Time, error) {
 	return startTime, stopTime, nil
 }
 
-func newQnamePublisher(dtm *dnstapMinimiser, inputCh chan *protocols.EventsMqttMessageNewQnameJson, mqttPubCh chan []byte, wg *sync.WaitGroup, autopahoCtx context.Context) {
+func (dtm *dnstapMinimiser) newQnamePublisher(inputCh chan *protocols.EventsMqttMessageNewQnameJson, mqttPubCh chan []byte, wg *sync.WaitGroup, autopahoCtx context.Context) {
 	wg.Add(1)
 	defer wg.Done()
 
@@ -1461,7 +1461,7 @@ func ip6BytesToInt(ip6Bytes []byte) (uint64, uint64, error) {
 	return ipIntNetwork, ipIntHost, nil
 }
 
-func writeSessionParquet(dtm *dnstapMinimiser, ps *prevSessions, dataDir string) error {
+func (dtm *dnstapMinimiser) writeSessionParquet(ps *prevSessions, dataDir string) error {
 	// Write session file to a sessions dir where it will be read by clickhouse
 	sessionsDir := filepath.Join(dataDir, "parquet", "sessions")
 
@@ -1472,7 +1472,7 @@ func writeSessionParquet(dtm *dnstapMinimiser, ps *prevSessions, dataDir string)
 	absoluteTmpFileName = filepath.Clean(absoluteTmpFileName) // Make gosec happy
 	dtm.log.Info("writing out session parquet file", "filename", absoluteTmpFileName)
 
-	outFile, err := createFile(dtm, absoluteTmpFileName)
+	outFile, err := dtm.createFile(absoluteTmpFileName)
 	if err != nil {
 		return fmt.Errorf("writeSessionParquet: unable to open histogram file: %w", err)
 	}
@@ -1569,7 +1569,7 @@ func getStartTimeFromRotationTime(rotationTime time.Time) time.Time {
 	return rotationTime.Add(-time.Second * 60)
 }
 
-func writeHistogramParquet(dtm *dnstapMinimiser, prevWellKnownDomainsData *wellKnownDomainsData, labelLimit int, outboxDir string) error {
+func (dtm *dnstapMinimiser) writeHistogramParquet(prevWellKnownDomainsData *wellKnownDomainsData, labelLimit int, outboxDir string) error {
 	startTime := getStartTimeFromRotationTime(prevWellKnownDomainsData.rotationTime)
 
 	absoluteTmpFileName, absoluteFileName := buildParquetFilenames(outboxDir, "dns_histogram", startTime, prevWellKnownDomainsData.rotationTime)
@@ -1577,7 +1577,7 @@ func writeHistogramParquet(dtm *dnstapMinimiser, prevWellKnownDomainsData *wellK
 	dtm.log.Info("writing out histogram file", "filename", absoluteTmpFileName)
 
 	absoluteTmpFileName = filepath.Clean(absoluteTmpFileName)
-	outFile, err := createFile(dtm, absoluteTmpFileName)
+	outFile, err := dtm.createFile(absoluteTmpFileName)
 	if err != nil {
 		return fmt.Errorf("writeHistogramParquet: unable to open histogram file: %w", err)
 	}
@@ -1616,7 +1616,7 @@ func writeHistogramParquet(dtm *dnstapMinimiser, prevWellKnownDomainsData *wellK
 		labels := dns.SplitDomainName(domain)
 
 		// Setting the labels now when we are out of the hot path.
-		setHistogramLabels(dtm, labels, labelLimit, hGramData)
+		dtm.setHistogramLabels(labels, labelLimit, hGramData)
 		hGramData.StartTime = startTimeMicro
 
 		// Write out the bytes from our hll data structures

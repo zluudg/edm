@@ -70,7 +70,7 @@ func BenchmarkSetHistogramLabels(b *testing.B) {
 	hd := &histogramData{}
 
 	for i := 0; i < b.N; i++ {
-		setHistogramLabels(dtm, labels, 10, hd)
+		dtm.setHistogramLabels(labels, 10, hd)
 	}
 }
 
@@ -157,7 +157,7 @@ func TestSetHistogramLabels(t *testing.T) {
 	dtm := &dnstapMinimiser{}
 	hd := &histogramData{}
 
-	setHistogramLabels(dtm, labels, 10, hd)
+	dtm.setHistogramLabels(labels, 10, hd)
 
 	if *hd.Label0 != labels[9] {
 		t.Fatalf("have: %s, want: %s", *hd.Label0, labels[9])
@@ -198,7 +198,7 @@ func TestSetSessionLabels(t *testing.T) {
 	dtm := &dnstapMinimiser{}
 	sd := &sessionData{}
 
-	setSessionLabels(dtm, labels, 10, sd)
+	dtm.setSessionLabels(labels, 10, sd)
 
 	if *sd.Label0 != labels[9] {
 		t.Fatalf("have: %s, want: %s", *sd.Label0, labels[9])

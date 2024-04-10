@@ -16,7 +16,7 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jws"
 )
 
-func newAutoPahoClientConfig(dtm *dnstapMinimiser, caCertPool *x509.CertPool, server string, clientID string, clientCert tls.Certificate, mqttKeepAlive uint16) (autopaho.ClientConfig, error) {
+func (dtm *dnstapMinimiser) newAutoPahoClientConfig(caCertPool *x509.CertPool, server string, clientID string, clientCert tls.Certificate, mqttKeepAlive uint16) (autopaho.ClientConfig, error) {
 
 	u, err := url.Parse(server)
 	if err != nil {
