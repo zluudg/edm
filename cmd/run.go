@@ -60,6 +60,7 @@ func init() {
 	runCmd.Flags().Int("mqtt-keepalive", 30, "Keepalive interval for MQTT connection")
 	//runCmd.Flags().Bool("mqtt-clean-start", true, "Control if a new MQTT session is created when connecting")
 	runCmd.Flags().Int("qname-seen-entries", 10000000, "Number of 'seen' qnames stored in LRU cache, need to be changed based on RAM")
+	runCmd.Flags().Int("cryptopan-address-entries", 10000000, "Number of cryptopan pseudonymised addresses stored in LRU cache, need to be changed based on RAM")
 	runCmd.Flags().Int("newqname-buffer", 1000, "Number of slots in new_qname publisher channel, if this is filled up we skip new_qname events")
 	runCmd.Flags().String("http-ca-file", "", "CA cert used for validating aggregate-receiver connection, defaults to using OS CA certs")
 	runCmd.Flags().String("http-signing-key-file", "dtm-http-signer-key.pem", "ECSDSA key used for signing HTTP messages to aggregate-receiver")

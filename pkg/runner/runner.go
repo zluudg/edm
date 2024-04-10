@@ -341,7 +341,12 @@ func getCryptopanAESKey(key string, salt string) []byte {
 	return aesKey
 }
 
-func (dtm *dnstapMinimiser) setCryptopan(key string, salt string) error {
+func (dtm *dnstapMinimiser) setCryptopan(key string, salt string, cacheEntries int) error {
+
+	cpnCache, err := lru.New[netip.Addr, netip.Addr](cacheEntries)
+	if err != nil {
+		return fmt.Errorf("setCryptopan: unable to create cache: %w", err)
+	}
 
 	cpn, err := createCryptopan(key, salt)
 	if err != nil {
@@ -350,6 +355,7 @@ func (dtm *dnstapMinimiser) setCryptopan(key string, salt string) error {
 
 	dtm.mutex.Lock()
 	dtm.cryptopan = cpn
+	dtm.cryptopanCache = cpnCache
 	dtm.mutex.Unlock()
 
 	return nil
@@ -376,7 +382,7 @@ func configUpdater(viperNotifyCh chan fsnotify.Event, dtm *dnstapMinimiser) {
 	t := time.AfterFunc(math.MaxInt64, func() {
 		dtm.log.Info("configUpdater: reacting to config file update", "filename", e.Name)
 
-		err := dtm.setCryptopan(viper.GetString("cryptopan-key"), viper.GetString("cryptopan-key-salt"))
+		err := dtm.setCryptopan(viper.GetString("cryptopan-key"), viper.GetString("cryptopan-key-salt"), viper.GetInt("cryptopan-address-entries"))
 		if err != nil {
 			dtm.log.Error("configUpdater: unable to update cryptopan instance", "error", err)
 		}
@@ -461,7 +467,7 @@ func Run() {
 	}
 
 	// Create an instance of the minimiser
-	dtm, err := newDnstapMinimiser(logger, viper.GetString("cryptopan-key"), viper.GetString("cryptopan-key-salt"), viper.GetBool("debug"))
+	dtm, err := newDnstapMinimiser(logger, viper.GetString("cryptopan-key"), viper.GetString("cryptopan-key-salt"), viper.GetInt("cryptopan-address-entries"), viper.GetBool("debug"))
 	if err != nil {
 		logger.Error("unable to init dtm", "error", err)
 		os.Exit(1)
@@ -577,7 +583,11 @@ func Run() {
 	// domain list yet we have seen since we started. To limit the
 	// possibility of unbounded memory usage we use a LRU cache instead of
 	// something simpler like a map.
-	seenQnameLRU, _ := lru.New[string, struct{}](viper.GetInt("qname-seen-entries"))
+	seenQnameLRU, err := lru.New[string, struct{}](viper.GetInt("qname-seen-entries"))
+	if err != nil {
+		logger.Error("unable to create seen-qname LRU", "error", err)
+		os.Exit(1)
+	}
 
 	aggregSender := newAggregateSender(dtm, httpURL, viper.GetString("http-signing-key-id"), httpSigningKey, httpCACertPool, httpClientCert)
 
@@ -619,13 +629,16 @@ func Run() {
 }
 
 type dnstapMinimiser struct {
-	inputChannel chan []byte          // the channel expected to be passed to dnstap ReadInto()
-	log          *slog.Logger         // any information logging is sent here
-	cryptopan    *cryptopan.Cryptopan // used for pseudonymising IP addresses
-	stop         chan struct{}        // close this channel to gracefully stop runMinimiser()
-	done         chan struct{}        // block on this channel to make sure output is flushed before exiting
-	debug        bool                 // if we should print debug messages during operation
-	mutex        sync.RWMutex         // Mutex for protecting updates to fields at runtime
+	inputChannel          chan []byte          // the channel expected to be passed to dnstap ReadInto()
+	log                   *slog.Logger         // any information logging is sent here
+	cryptopan             *cryptopan.Cryptopan // used for pseudonymising IP addresses
+	cryptopanCache        *lru.Cache[netip.Addr, netip.Addr]
+	cryptopanCacheHit     prometheus.Counter
+	cryptopanCacheEvicted prometheus.Counter
+	stop                  chan struct{} // close this channel to gracefully stop runMinimiser()
+	done                  chan struct{} // block on this channel to make sure output is flushed before exiting
+	debug                 bool          // if we should print debug messages during operation
+	mutex                 sync.RWMutex  // Mutex for protecting updates to fields at runtime
 }
 
 func createCryptopan(key string, salt string) (*cryptopan.Cryptopan, error) {
@@ -640,13 +653,23 @@ func createCryptopan(key string, salt string) (*cryptopan.Cryptopan, error) {
 	return cpn, nil
 }
 
-func newDnstapMinimiser(logger *slog.Logger, cryptopanKey string, cryptopanSalt string, debug bool) (*dnstapMinimiser, error) {
+func newDnstapMinimiser(logger *slog.Logger, cryptopanKey string, cryptopanSalt string, cryptopanCacheEntries int, debug bool) (*dnstapMinimiser, error) {
 	dtm := &dnstapMinimiser{}
 
-	err := dtm.setCryptopan(cryptopanKey, cryptopanSalt)
+	err := dtm.setCryptopan(cryptopanKey, cryptopanSalt, cryptopanCacheEntries)
 	if err != nil {
 		return nil, fmt.Errorf("newDnstapMinimiser: %w", err)
 	}
+
+	dtm.cryptopanCacheHit = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "dtm_cryptopan_lru_hit_total",
+		Help: "The total number of times we got a hit in the cryptopan address LRU cache",
+	})
+
+	dtm.cryptopanCacheEvicted = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "dtm_cryptopan_lru_evicted_total",
+		Help: "The total number of times something was evicted from the cryptopan address LRU cache",
+	})
 
 	dtm.stop = make(chan struct{})
 	dtm.done = make(chan struct{})
@@ -1672,13 +1695,13 @@ func (dtm *dnstapMinimiser) pseudonymiseDnstap(dt *dnstap.Dnstap) {
 	dtm.mutex.RLock()
 
 	if dt.Message.QueryAddress != nil {
-		dt.Message.QueryAddress, err = pseudonymiseIP(dtm, dt.Message.QueryAddress)
+		dt.Message.QueryAddress, err = dtm.pseudonymiseIP(dt.Message.QueryAddress)
 		if err != nil {
 			dtm.log.Error("pseudonymiseDnstap: unable to parse dt.Message.QueryAddress", "error", err)
 		}
 	}
 	if dt.Message.ResponseAddress != nil {
-		dt.Message.ResponseAddress, err = pseudonymiseIP(dtm, dt.Message.ResponseAddress)
+		dt.Message.ResponseAddress, err = dtm.pseudonymiseIP(dt.Message.ResponseAddress)
 		if err != nil {
 			dtm.log.Error("pseudonymiseDnstap: unable to parse dt.Message.ResponseAddress", "error", err)
 		}
@@ -1688,19 +1711,30 @@ func (dtm *dnstapMinimiser) pseudonymiseDnstap(dt *dnstap.Dnstap) {
 }
 
 // Pseudonymise IP address, even on error the returned []byte is usable (zeroed address)
-func pseudonymiseIP(dtm *dnstapMinimiser, ipBytes []byte) ([]byte, error) {
+func (dtm *dnstapMinimiser) pseudonymiseIP(ipBytes []byte) ([]byte, error) {
 	addr, ok := netip.AddrFromSlice(ipBytes)
 	if !ok {
 		// Replace address with zeroes since we do not know if
 		// the contained junk is somehow sensitive
 		return make([]byte, len(ipBytes)), errors.New("unable to parse addr")
 	} else {
-		anonymisedAddr, ok := netip.AddrFromSlice(dtm.cryptopan.Anonymize(addr.AsSlice()))
+		anonymisedAddr, ok := dtm.cryptopanCache.Get(addr)
 		if !ok {
-			// Replace address with zeroes here as well
-			// since we do not know if the contained junk
-			// is somehow sensitive.
-			return make([]byte, len(ipBytes)), errors.New("unable to anonymise addr")
+			// Not in cache, calculate the pseudonymised IP
+			anonymisedAddr, ok = netip.AddrFromSlice(dtm.cryptopan.Anonymize(addr.AsSlice()))
+			if !ok {
+				// Replace address with zeroes here as well
+				// since we do not know if the contained junk
+				// is somehow sensitive.
+				return make([]byte, len(ipBytes)), errors.New("unable to anonymise addr")
+			}
+
+			evicted := dtm.cryptopanCache.Add(addr, anonymisedAddr)
+			if evicted {
+				dtm.cryptopanCacheEvicted.Inc()
+			}
+		} else {
+			dtm.cryptopanCacheHit.Inc()
 		}
 		// cryptopan.Anonymize() returns IPv4 addresses via net.IPv4(),
 		// meaning we will get IPv4 addresses mapped to IPv6, e.g.

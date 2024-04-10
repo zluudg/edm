@@ -376,7 +376,9 @@ func TestPseudonymiseDnstap(t *testing.T) {
 		},
 	}
 
-	dtm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, false)
+	cryptopanCacheSize := 10
+
+	dtm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false)
 	if err != nil {
 		t.Fatalf("unable to setup dtm: %s", err)
 	}
@@ -431,7 +433,7 @@ func TestPseudonymiseDnstap(t *testing.T) {
 	}
 
 	// Replace the cryptopan instance and verify we now get different pseudonymised results
-	err = dtm.setCryptopan("key2", cryptopanSalt)
+	err = dtm.setCryptopan("key2", cryptopanSalt, cryptopanCacheSize)
 	if err != nil {
 		t.Fatalf("unavle to call dtm.SetCryptopan: %s", err)
 	}
