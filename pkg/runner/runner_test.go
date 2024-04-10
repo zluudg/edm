@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -38,8 +39,7 @@ func BenchmarkWKDTIsKnown(b *testing.B) {
 	err = hll.Defaults(hll.Settings{
 		Log2m:             10,
 		Regwidth:          4,
-		ExplicitThreshold: hll.AutoExplicitThreshold,
-		SparseEnabled:     true,
+		ExplicitThreshold: hll.AutoExplicitThreshold, SparseEnabled: true,
 	})
 	if err != nil {
 		b.Fatal(err)
@@ -72,6 +72,82 @@ func BenchmarkSetHistogramLabels(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		setHistogramLabels(dtm, labels, 10, hd)
 	}
+}
+
+func TestWKD(t *testing.T) {
+
+	domainList := []string{
+		"example.com.",  // exact match
+		".example.net.", // suffix match
+	}
+
+	// Make it so dawg Add() does not panic if the containts of domainList
+	// is not in alphabetical order
+	slices.Sort(domainList)
+
+	dBuilder := dawg.New()
+
+	for _, domain := range domainList {
+		dBuilder.Add(domain)
+	}
+
+	dFinder := dBuilder.Finish()
+
+	var wkdTests = []struct {
+		name        string
+		domain      string
+		found       bool
+		suffixMatch bool
+	}{
+		{
+			name:        "found exact match",
+			domain:      "example.com.",
+			found:       true,
+			suffixMatch: false,
+		},
+		{
+			name:        "missing exact match",
+			domain:      "www.example.com.",
+			found:       false,
+			suffixMatch: false,
+		},
+		{
+			name:        "found suffix match",
+			domain:      "www.example.net.",
+			found:       true,
+			suffixMatch: true,
+		},
+		{
+			name:        "no match for for suffix entry",
+			domain:      "example.net.",
+			found:       false,
+			suffixMatch: false,
+		},
+	}
+
+	wkd, err := newWellKnownDomainsTracker(dFinder)
+	if err != nil {
+		t.Fatalf("unable to create well-known domains tracker: %s", err)
+	}
+
+	for _, test := range wkdTests {
+		m := new(dns.Msg)
+		m.SetQuestion(test.domain, dns.TypeA)
+		i, suffixMatch := wkd.dawgIndex(m)
+
+		if test.found && i == dawgNotFound {
+			t.Fatalf("%s: expected match %s, but was not found", test.name, test.domain)
+		}
+
+		if !test.found && i != dawgNotFound {
+			t.Fatalf("%s: expected not match for %s, but it was found", test.name, test.domain)
+		}
+
+		if suffixMatch != test.suffixMatch {
+			t.Fatalf("%s: suffix match mismatch for %s, expected: %t, have: %t", test.name, test.domain, test.suffixMatch, suffixMatch)
+		}
+	}
+
 }
 
 func TestSetHistogramLabels(t *testing.T) {
