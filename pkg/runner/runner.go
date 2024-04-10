@@ -630,9 +630,9 @@ type dnstapMinimiser struct {
 
 func createCryptopan(key string, salt string) (*cryptopan.Cryptopan, error) {
 
-	cryptoPanKey := getCryptopanAESKey(key, salt)
+	cryptopanKey := getCryptopanAESKey(key, salt)
 
-	cpn, err := cryptopan.New(cryptoPanKey)
+	cpn, err := cryptopan.New(cryptopanKey)
 	if err != nil {
 		return nil, fmt.Errorf("createCryptopan: %w", err)
 	}
