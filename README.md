@@ -45,3 +45,5 @@ run at the top level directory prior to commiting:
 * `go vet ./...`
 * `staticcheck ./...` (see [staticcheck](https://staticcheck.io))
 * `gosec ./...` (see [gosec](https://github.com/securego/gosec))
+* `golangci-lint run` (see [golangci-lint](https://golangci-lint.run))
+* `go test ./...`
