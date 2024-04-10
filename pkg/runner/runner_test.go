@@ -11,11 +11,9 @@ import (
 	"testing"
 
 	dnstap "github.com/dnstap/golang-dnstap"
-	"github.com/fsnotify/fsnotify"
 	"github.com/miekg/dns"
 	"github.com/segmentio/go-hll"
 	"github.com/smhanov/dawg"
-	"golang.org/x/crypto/argon2"
 )
 
 var testDawg = flag.Bool("test-dawg", false, "perform tests requiring a well-known-domains.dawg file")
@@ -272,8 +270,6 @@ func TestPseudonymiseDnstap(t *testing.T) {
 
 	cryptopanSalt := "aabbccddeeffgghh"
 
-	aesKey := argon2.IDKey([]byte("key1"), []byte(cryptopanSalt), 1, 64*1024, 4, 32)
-
 	// The original addresses we want to pseudonymise
 	origQueryAddr4 := netip.MustParseAddr("198.51.100.20")
 	origRespAddr4 := netip.MustParseAddr("198.51.100.30")
@@ -304,7 +300,7 @@ func TestPseudonymiseDnstap(t *testing.T) {
 		},
 	}
 
-	dtm, err := newDnstapMinimiser(logger, aesKey, false)
+	dtm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, false)
 	if err != nil {
 		t.Fatalf("unable to setup dtm: %s", err)
 	}
@@ -359,7 +355,10 @@ func TestPseudonymiseDnstap(t *testing.T) {
 	}
 
 	// Replace the cryptopan instance and verify we now get different pseudonymised results
-	setCryptopan(dtm, fsnotify.Event{Name: "TestPseudonymiseDnstap"}, "key2", cryptopanSalt)
+	err = dtm.setCryptopan("key2", cryptopanSalt)
+	if err != nil {
+		t.Fatalf("unavle to call dtm.SetCryptopan: %s", err)
+	}
 
 	// Reset the addresses and pseudonymise again with the updated key
 	dt4.Message.QueryAddress = origQueryAddr4.AsSlice()

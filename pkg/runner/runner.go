@@ -328,22 +328,31 @@ timerLoop:
 	dtm.log.Info("exiting diskCleaner loop")
 }
 
-func setCryptopan(dtm *dnstapMinimiser, e fsnotify.Event, key string, salt string) {
-
-	dtm.log.Info("setCryptopan: reacting to config file update", "filename", e.Name)
-
+// Create a 32 byte length secret based on the supplied -crypto-pan key,
+// this way the user can supply a -cryptopan-key of any length and
+// we still end up with the 32 byte length expected by AES.
+//
+// Using a proper password KDF (argon2) might be overkill as we are not
+// storing the resulting hash anywhere, but it only affects startup/key
+// rotation time of a mostly long running tool.
+func getCryptopanAESKey(key string, salt string) []byte {
 	var aesKeyLen uint32 = 32
 	aesKey := argon2.IDKey([]byte(key), []byte(salt), 1, 64*1024, 4, aesKeyLen)
+	return aesKey
+}
 
-	cpn, err := cryptopan.New(aesKey)
+func (dtm *dnstapMinimiser) setCryptopan(key string, salt string) error {
+
+	cpn, err := createCryptopan(key, salt)
 	if err != nil {
-		dtm.log.Error("setCryptopan: unable to create new cryptopan instance", "error", err)
-		return
+		return err
 	}
 
 	dtm.mutex.Lock()
 	dtm.cryptopan = cpn
 	dtm.mutex.Unlock()
+
+	return nil
 }
 
 func configUpdater(viperNotifyCh chan fsnotify.Event, dtm *dnstapMinimiser) {
@@ -364,7 +373,14 @@ func configUpdater(viperNotifyCh chan fsnotify.Event, dtm *dnstapMinimiser) {
 	// Start with creating a timer that will call the update function in the
 	// future but stop it so it never runs by default.
 	var e fsnotify.Event
-	t := time.AfterFunc(math.MaxInt64, func() { setCryptopan(dtm, e, viper.GetString("cryptopan-key"), viper.GetString("cryptopan-key-salt")) })
+	t := time.AfterFunc(math.MaxInt64, func() {
+		dtm.log.Info("configUpdater: reacting to config file update", "filename", e.Name)
+
+		err := dtm.setCryptopan(viper.GetString("cryptopan-key"), viper.GetString("cryptopan-key-salt"))
+		if err != nil {
+			dtm.log.Error("configUpdater: unable to update cryptopan instance", "error", err)
+		}
+	})
 	t.Stop()
 
 	for e = range viperNotifyCh {
@@ -444,18 +460,8 @@ func Run() {
 		os.Exit(1)
 	}
 
-	// Create a 32 byte length secret based on the supplied -crypto-pan key,
-	// this way the user can supply a -cryptopan-key of any length and
-	// we still end up with the 32 byte length expected by AES.
-	//
-	// Using a proper password KDF (argon2) might be overkill as we are not
-	// storing the resulting hash anywhere, but it only affects startup
-	// time of a mostly long running tool.
-	var aesKeyLen uint32 = 32
-	aesKey := argon2.IDKey([]byte(viper.GetString("cryptopan-key")), []byte(viper.GetString("cryptopan-key-salt")), 1, 64*1024, 4, aesKeyLen)
-
 	// Create an instance of the minimiser
-	dtm, err := newDnstapMinimiser(logger, aesKey, viper.GetBool("debug"))
+	dtm, err := newDnstapMinimiser(logger, viper.GetString("cryptopan-key"), viper.GetString("cryptopan-key-salt"), viper.GetBool("debug"))
 	if err != nil {
 		logger.Error("unable to init dtm", "error", err)
 		os.Exit(1)
@@ -622,13 +628,26 @@ type dnstapMinimiser struct {
 	mutex        sync.RWMutex         // Mutex for protecting updates to fields at runtime
 }
 
-func newDnstapMinimiser(logger *slog.Logger, cryptoPanKey []byte, debug bool) (*dnstapMinimiser, error) {
+func createCryptopan(key string, salt string) (*cryptopan.Cryptopan, error) {
+
+	cryptoPanKey := getCryptopanAESKey(key, salt)
+
 	cpn, err := cryptopan.New(cryptoPanKey)
+	if err != nil {
+		return nil, fmt.Errorf("createCryptopan: %w", err)
+	}
+
+	return cpn, nil
+}
+
+func newDnstapMinimiser(logger *slog.Logger, cryptopanKey string, cryptopanSalt string, debug bool) (*dnstapMinimiser, error) {
+	dtm := &dnstapMinimiser{}
+
+	err := dtm.setCryptopan(cryptopanKey, cryptopanSalt)
 	if err != nil {
 		return nil, fmt.Errorf("newDnstapMinimiser: %w", err)
 	}
-	dtm := &dnstapMinimiser{}
-	dtm.cryptopan = cpn
+
 	dtm.stop = make(chan struct{})
 	dtm.done = make(chan struct{})
 	// Size 32 matches unexported "const outputChannelSize = 32" in
