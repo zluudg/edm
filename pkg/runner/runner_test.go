@@ -442,10 +442,54 @@ func TestPseudonymiseDnstap(t *testing.T) {
 		if dtm.cryptopanCache.Len() == 0 {
 			t.Fatalf("there should be entries in the cryptopan cache but it is empty")
 		}
+
+		// Verify the entry in the cache is the same as the one we got back
+		cachedPseudoQueryAddr4, ok := dtm.cryptopanCache.Get(origQueryAddr4)
+		if !ok {
+			t.Fatalf("unable to lookup IPv4 query address %s in cache", origQueryAddr4)
+		}
+		if cachedPseudoQueryAddr4 != pseudoQueryAddr4 {
+			t.Fatalf("cached pseudonymised IPv4 query address %s is not the same as the calculated address %s", cachedPseudoQueryAddr4, pseudoQueryAddr4)
+		}
+
+		cachedPseudoRespAddr4, ok := dtm.cryptopanCache.Get(origRespAddr4)
+		if !ok {
+			t.Fatalf("unable to lookup IPv4 response address %s in cache", origRespAddr4)
+		}
+		if cachedPseudoRespAddr4 != pseudoRespAddr4 {
+			t.Fatalf("cached pseudonymised IPv4 response address %s is not the same as the calculated address %s", cachedPseudoRespAddr4, pseudoRespAddr4)
+		}
+
+		cachedPseudoQueryAddr6, ok := dtm.cryptopanCache.Get(origQueryAddr6)
+		if !ok {
+			t.Fatalf("unable to lookup IPv6 query address %s in cache", origQueryAddr6)
+		}
+		if cachedPseudoQueryAddr6 != pseudoQueryAddr6 {
+			t.Fatalf("cached pseudonymised IPv6 query address %s is not the same as the calculated address %s", cachedPseudoQueryAddr6, pseudoQueryAddr6)
+		}
+
+		cachedPseudoRespAddr6, ok := dtm.cryptopanCache.Get(origRespAddr6)
+		if !ok {
+			t.Fatalf("unable to lookup IPv6 response address %s in cache", origRespAddr6)
+		}
+		if cachedPseudoRespAddr6 != pseudoRespAddr6 {
+			t.Fatalf("cached pseudonymised IPv6 response address %s is not the same as the calculated address %s", cachedPseudoRespAddr6, pseudoRespAddr6)
+		}
 	}
 
 	if dtm.cryptopanCache != nil {
 		t.Logf("number of pseudonymisation cache entries before reset: %d", dtm.cryptopanCache.Len())
+	}
+
+	if dtm.cryptopanCache != nil {
+		for _, key := range dtm.cryptopanCache.Keys() {
+			value, ok := dtm.cryptopanCache.Get(key)
+			if !ok {
+				t.Fatalf("unable to extract value for key before reset: %s", key)
+			}
+
+			t.Logf("inital cache key: %s, value: %s", key, value)
+		}
 	}
 
 	// Replace the cryptopan instance and verify we now get different pseudonymised results
@@ -530,6 +574,14 @@ func TestPseudonymiseDnstap(t *testing.T) {
 
 	if dtm.cryptopanCache != nil {
 		t.Logf("number of pseudonymisation cache entries before end: %d", dtm.cryptopanCache.Len())
+		for _, key := range dtm.cryptopanCache.Keys() {
+			value, ok := dtm.cryptopanCache.Get(key)
+			if !ok {
+				t.Fatalf("unable to extract value for key before end: %s", key)
+			}
+
+			t.Logf("reset cache key: %s, value: %s", key, value)
+		}
 	}
 }
 

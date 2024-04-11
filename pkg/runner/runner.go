@@ -1755,6 +1755,12 @@ func (dtm *dnstapMinimiser) pseudonymiseIP(ipBytes []byte) ([]byte, error) {
 				return make([]byte, len(ipBytes)), errors.New("unable to anonymise addr")
 			}
 
+			// cryptopan.Anonymize() returns IPv4 addresses via net.IPv4(),
+			// meaning we will get IPv4 addresses mapped to IPv6, e.g.
+			// ::ffff:127.0.0.1. It is easier to handle these as native
+			// IPv4 addresses in our system so call Unmap() on it.
+			pseudonymisedAddr = pseudonymisedAddr.Unmap()
+
 			if dtm.cryptopanCache != nil {
 				evicted := dtm.cryptopanCache.Add(addr, pseudonymisedAddr)
 				if evicted {
@@ -1763,11 +1769,7 @@ func (dtm *dnstapMinimiser) pseudonymiseIP(ipBytes []byte) ([]byte, error) {
 			}
 		}
 
-		// cryptopan.Anonymize() returns IPv4 addresses via net.IPv4(),
-		// meaning we will get IPv4 addresses mapped to IPv6, e.g.
-		// ::ffff:127.0.0.1. It is easier to handle these as native
-		// IPv4 addresses in our system so call Unmap() on it.
-		return pseudonymisedAddr.Unmap().AsSlice(), nil
+		return pseudonymisedAddr.AsSlice(), nil
 	}
 }
 
