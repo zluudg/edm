@@ -522,3 +522,71 @@ func TestPseudonymiseDnstap(t *testing.T) {
 
 	t.Logf("number of pseudonymisation cache entries before end: %d", dtm.cryptopanCache.Len())
 }
+
+func BenchmarkPseudonymiseDnstap4(b *testing.B) {
+	b.ReportAllocs()
+
+	// Dont output logging
+	// https://github.com/golang/go/issues/62005
+	discardLogger := slog.NewTextHandler(io.Discard, nil)
+	logger := slog.New(discardLogger)
+
+	cryptopanSalt := "aabbccddeeffgghh"
+
+	// The original addresses we want to pseudonymise
+	origQueryAddr4 := netip.MustParseAddr("198.51.100.20")
+	origRespAddr4 := netip.MustParseAddr("198.51.100.30")
+
+	dt4 := &dnstap.Dnstap{
+		Message: &dnstap.Message{
+			QueryAddress:    origQueryAddr4.AsSlice(),
+			ResponseAddress: origRespAddr4.AsSlice(),
+		},
+	}
+
+	cryptopanCacheSize := 10
+
+	dtm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false)
+	if err != nil {
+		b.Fatalf("unable to setup dtm: %s", err)
+	}
+
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		dtm.pseudonymiseDnstap(dt4)
+	}
+}
+
+func BenchmarkPseudonymiseDnstap6(b *testing.B) {
+	b.ReportAllocs()
+
+	// Dont output logging
+	// https://github.com/golang/go/issues/62005
+	discardLogger := slog.NewTextHandler(io.Discard, nil)
+	logger := slog.New(discardLogger)
+
+	cryptopanSalt := "aabbccddeeffgghh"
+
+	// The original addresses we want to pseudonymise
+	origQueryAddr6 := netip.MustParseAddr("2001:db8:1122:3344:5566:7788:99aa:bbcc")
+	origRespAddr6 := netip.MustParseAddr("2001:db8:1122:3344:5566:7788:99aa:ddee")
+
+	dt6 := &dnstap.Dnstap{
+		Message: &dnstap.Message{
+			QueryAddress:    origQueryAddr6.AsSlice(),
+			ResponseAddress: origRespAddr6.AsSlice(),
+		},
+	}
+
+	cryptopanCacheSize := 10
+
+	dtm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false)
+	if err != nil {
+		b.Fatalf("unable to setup dtm: %s", err)
+	}
+
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		dtm.pseudonymiseDnstap(dt6)
+	}
+}

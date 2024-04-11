@@ -665,32 +665,41 @@ func newDnstapMinimiser(logger *slog.Logger, cryptopanKey string, cryptopanSalt 
 		return nil, fmt.Errorf("newDnstapMinimiser: %w", err)
 	}
 
-	dtm.cryptopanCacheHit = promauto.NewCounter(prometheus.CounterOpts{
+	// Use separate prometheus registry for each dtm instance, otherwise
+	// trying to run tests where each test do their own call to
+	// newDnstapMinimiser() will panic:
+	// ===
+	// panic: duplicate metrics collector registration attempted
+	// ===
+	// Some more info at https://github.com/prometheus/client_golang/issues/716
+	promReg := prometheus.NewRegistry()
+
+	dtm.cryptopanCacheHit = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
 		Name: "dtm_cryptopan_lru_hit_total",
 		Help: "The total number of times we got a hit in the cryptopan address LRU cache",
 	})
 
-	dtm.cryptopanCacheEvicted = promauto.NewCounter(prometheus.CounterOpts{
+	dtm.cryptopanCacheEvicted = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
 		Name: "dtm_cryptopan_lru_evicted_total",
 		Help: "The total number of times something was evicted from the cryptopan address LRU cache",
 	})
 
-	dtm.dnstapProcessed = promauto.NewCounter(prometheus.CounterOpts{
+	dtm.dnstapProcessed = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
 		Name: "dtm_processed_dnstap_total",
 		Help: "The total number of processed dnstap packets",
 	})
 
-	dtm.newQnameQueued = promauto.NewCounter(prometheus.CounterOpts{
+	dtm.newQnameQueued = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
 		Name: "dtm_new_qname_queued_total",
 		Help: "The total number of queued new_qname events",
 	})
 
-	dtm.newQnameDiscarded = promauto.NewCounter(prometheus.CounterOpts{
+	dtm.newQnameDiscarded = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
 		Name: "dtm_new_qname_discarded_total",
 		Help: "The total number of discarded new_qname events",
 	})
 
-	dtm.seenQnameLRUEvicted = promauto.NewCounter(prometheus.CounterOpts{
+	dtm.seenQnameLRUEvicted = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
 		Name: "dtm_seen_qname_lru_evicted_total",
 		Help: "The total number of times something was evicted from the new_qname LRU cache",
 	})
