@@ -343,9 +343,14 @@ func getCryptopanAESKey(key string, salt string) []byte {
 
 func (dtm *dnstapMinimiser) setCryptopan(key string, salt string, cacheEntries int) error {
 
-	cpnCache, err := lru.New[netip.Addr, netip.Addr](cacheEntries)
-	if err != nil {
-		return fmt.Errorf("setCryptopan: unable to create cache: %w", err)
+	var cpnCache *lru.Cache[netip.Addr, netip.Addr]
+	var err error
+
+	if cacheEntries != 0 {
+		cpnCache, err = lru.New[netip.Addr, netip.Addr](cacheEntries)
+		if err != nil {
+			return fmt.Errorf("setCryptopan: unable to create cache: %w", err)
+		}
 	}
 
 	cpn, err := createCryptopan(key, salt)
@@ -1731,9 +1736,17 @@ func (dtm *dnstapMinimiser) pseudonymiseIP(ipBytes []byte) ([]byte, error) {
 		// the contained junk is somehow sensitive
 		return make([]byte, len(ipBytes)), errors.New("unable to parse addr")
 	} else {
-		pseudonymisedAddr, ok := dtm.cryptopanCache.Get(addr)
-		if !ok {
-			// Not in cache, calculate the pseudonymised IP
+		var pseudonymisedAddr netip.Addr
+		var ok bool
+
+		if dtm.cryptopanCache != nil {
+			pseudonymisedAddr, ok = dtm.cryptopanCache.Get(addr)
+		}
+
+		if ok {
+			dtm.cryptopanCacheHit.Inc()
+		} else {
+			// Not in cache or cache disabled, calculate the pseudonymised IP
 			pseudonymisedAddr, ok = netip.AddrFromSlice(dtm.cryptopan.Anonymize(addr.AsSlice()))
 			if !ok {
 				// Replace address with zeroes here as well
@@ -1742,13 +1755,14 @@ func (dtm *dnstapMinimiser) pseudonymiseIP(ipBytes []byte) ([]byte, error) {
 				return make([]byte, len(ipBytes)), errors.New("unable to anonymise addr")
 			}
 
-			evicted := dtm.cryptopanCache.Add(addr, pseudonymisedAddr)
-			if evicted {
-				dtm.cryptopanCacheEvicted.Inc()
+			if dtm.cryptopanCache != nil {
+				evicted := dtm.cryptopanCache.Add(addr, pseudonymisedAddr)
+				if evicted {
+					dtm.cryptopanCacheEvicted.Inc()
+				}
 			}
-		} else {
-			dtm.cryptopanCacheHit.Inc()
 		}
+
 		// cryptopan.Anonymize() returns IPv4 addresses via net.IPv4(),
 		// meaning we will get IPv4 addresses mapped to IPv6, e.g.
 		// ::ffff:127.0.0.1. It is easier to handle these as native

@@ -383,8 +383,10 @@ func TestPseudonymiseDnstap(t *testing.T) {
 		t.Fatalf("unable to setup dtm: %s", err)
 	}
 
-	if dtm.cryptopanCache.Len() != 0 {
-		t.Fatalf("there should be no entries in newly initialised cryptopan cache but it contains items: %d", dtm.cryptopanCache.Len())
+	if dtm.cryptopanCache != nil {
+		if dtm.cryptopanCache.Len() != 0 {
+			t.Fatalf("there should be no entries in newly initialised cryptopan cache but it contains items: %d", dtm.cryptopanCache.Len())
+		}
 	}
 
 	dtm.pseudonymiseDnstap(dt4)
@@ -436,11 +438,15 @@ func TestPseudonymiseDnstap(t *testing.T) {
 		t.Fatalf("pseudonymised IPv6 resp address %s is not the expected address %s", pseudoRespAddr6, expectedPseudoRespAddr6)
 	}
 
-	if dtm.cryptopanCache.Len() == 0 {
-		t.Fatalf("there should be entries in the cryptopan cache but it is empty")
+	if dtm.cryptopanCache != nil {
+		if dtm.cryptopanCache.Len() == 0 {
+			t.Fatalf("there should be entries in the cryptopan cache but it is empty")
+		}
 	}
 
-	t.Logf("number of pseudonymisation cache entries before reset: %d", dtm.cryptopanCache.Len())
+	if dtm.cryptopanCache != nil {
+		t.Logf("number of pseudonymisation cache entries before reset: %d", dtm.cryptopanCache.Len())
+	}
 
 	// Replace the cryptopan instance and verify we now get different pseudonymised results
 	err = dtm.setCryptopan("key2", cryptopanSalt, cryptopanCacheSize)
@@ -448,8 +454,10 @@ func TestPseudonymiseDnstap(t *testing.T) {
 		t.Fatalf("unable to call dtm.SetCryptopan: %s", err)
 	}
 
-	if dtm.cryptopanCache.Len() != 0 {
-		t.Fatalf("there should be no cache entries in replaced cryptopan cache but it contains items: %d", dtm.cryptopanCache.Len())
+	if dtm.cryptopanCache != nil {
+		if dtm.cryptopanCache.Len() != 0 {
+			t.Fatalf("there should be no cache entries in replaced cryptopan cache but it contains items: %d", dtm.cryptopanCache.Len())
+		}
 	}
 
 	// Reset the addresses and pseudonymise again with the updated key
@@ -520,10 +528,12 @@ func TestPseudonymiseDnstap(t *testing.T) {
 		t.Fatalf("updated pseudonymised IPv6 resp address %s is not the expected address %s", pseudoRespAddrUpdated6, expectedPseudoRespAddrUpdated6)
 	}
 
-	t.Logf("number of pseudonymisation cache entries before end: %d", dtm.cryptopanCache.Len())
+	if dtm.cryptopanCache != nil {
+		t.Logf("number of pseudonymisation cache entries before end: %d", dtm.cryptopanCache.Len())
+	}
 }
 
-func BenchmarkPseudonymiseDnstap4(b *testing.B) {
+func BenchmarkPseudonymiseDnstapWithCache4(b *testing.B) {
 	b.ReportAllocs()
 
 	// Dont output logging
@@ -537,13 +547,6 @@ func BenchmarkPseudonymiseDnstap4(b *testing.B) {
 	origQueryAddr4 := netip.MustParseAddr("198.51.100.20")
 	origRespAddr4 := netip.MustParseAddr("198.51.100.30")
 
-	dt4 := &dnstap.Dnstap{
-		Message: &dnstap.Message{
-			QueryAddress:    origQueryAddr4.AsSlice(),
-			ResponseAddress: origRespAddr4.AsSlice(),
-		},
-	}
-
 	cryptopanCacheSize := 10
 
 	dtm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false)
@@ -553,11 +556,50 @@ func BenchmarkPseudonymiseDnstap4(b *testing.B) {
 
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
+		dt4 := &dnstap.Dnstap{
+			Message: &dnstap.Message{
+				QueryAddress:    origQueryAddr4.AsSlice(),
+				ResponseAddress: origRespAddr4.AsSlice(),
+			},
+		}
 		dtm.pseudonymiseDnstap(dt4)
 	}
 }
 
-func BenchmarkPseudonymiseDnstap6(b *testing.B) {
+func BenchmarkPseudonymiseDnstapWithoutCache4(b *testing.B) {
+	b.ReportAllocs()
+
+	// Dont output logging
+	// https://github.com/golang/go/issues/62005
+	discardLogger := slog.NewTextHandler(io.Discard, nil)
+	logger := slog.New(discardLogger)
+
+	cryptopanSalt := "aabbccddeeffgghh"
+
+	// The original addresses we want to pseudonymise
+	origQueryAddr4 := netip.MustParseAddr("198.51.100.20")
+	origRespAddr4 := netip.MustParseAddr("198.51.100.30")
+
+	cryptopanCacheSize := 0
+
+	dtm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false)
+	if err != nil {
+		b.Fatalf("unable to setup dtm: %s", err)
+	}
+
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		dt4 := &dnstap.Dnstap{
+			Message: &dnstap.Message{
+				QueryAddress:    origQueryAddr4.AsSlice(),
+				ResponseAddress: origRespAddr4.AsSlice(),
+			},
+		}
+		dtm.pseudonymiseDnstap(dt4)
+	}
+}
+
+func BenchmarkPseudonymiseDnstapWithCache6(b *testing.B) {
 	b.ReportAllocs()
 
 	// Dont output logging
@@ -571,13 +613,6 @@ func BenchmarkPseudonymiseDnstap6(b *testing.B) {
 	origQueryAddr6 := netip.MustParseAddr("2001:db8:1122:3344:5566:7788:99aa:bbcc")
 	origRespAddr6 := netip.MustParseAddr("2001:db8:1122:3344:5566:7788:99aa:ddee")
 
-	dt6 := &dnstap.Dnstap{
-		Message: &dnstap.Message{
-			QueryAddress:    origQueryAddr6.AsSlice(),
-			ResponseAddress: origRespAddr6.AsSlice(),
-		},
-	}
-
 	cryptopanCacheSize := 10
 
 	dtm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false)
@@ -587,6 +622,45 @@ func BenchmarkPseudonymiseDnstap6(b *testing.B) {
 
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
+		dt6 := &dnstap.Dnstap{
+			Message: &dnstap.Message{
+				QueryAddress:    origQueryAddr6.AsSlice(),
+				ResponseAddress: origRespAddr6.AsSlice(),
+			},
+		}
+		dtm.pseudonymiseDnstap(dt6)
+	}
+}
+
+func BenchmarkPseudonymiseDnstapWithoutCache6(b *testing.B) {
+	b.ReportAllocs()
+
+	// Dont output logging
+	// https://github.com/golang/go/issues/62005
+	discardLogger := slog.NewTextHandler(io.Discard, nil)
+	logger := slog.New(discardLogger)
+
+	cryptopanSalt := "aabbccddeeffgghh"
+
+	// The original addresses we want to pseudonymise
+	origQueryAddr6 := netip.MustParseAddr("2001:db8:1122:3344:5566:7788:99aa:bbcc")
+	origRespAddr6 := netip.MustParseAddr("2001:db8:1122:3344:5566:7788:99aa:ddee")
+
+	cryptopanCacheSize := 0
+
+	dtm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false)
+	if err != nil {
+		b.Fatalf("unable to setup dtm: %s", err)
+	}
+
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		dt6 := &dnstap.Dnstap{
+			Message: &dnstap.Message{
+				QueryAddress:    origQueryAddr6.AsSlice(),
+				ResponseAddress: origRespAddr6.AsSlice(),
+			},
+		}
 		dtm.pseudonymiseDnstap(dt6)
 	}
 }
