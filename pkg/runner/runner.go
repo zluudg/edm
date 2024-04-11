@@ -38,6 +38,7 @@ import (
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/miekg/dns"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/segmentio/go-hll"
@@ -613,7 +614,8 @@ func Run() {
 		MaxHeaderBytes: 1 << 20,
 	}
 
-	http.Handle("/metrics", promhttp.Handler())
+	// Setup custom promHandler since we want to use our per-dtm registry
+	http.Handle("/metrics", promhttp.InstrumentMetricHandler(dtm.promReg, promhttp.HandlerFor(dtm.promReg, promhttp.HandlerOpts{Registry: dtm.promReg})))
 	go func() {
 		err := metricsServer.ListenAndServe()
 		logger.Error("metricsServer failed", "error", err)
@@ -638,12 +640,14 @@ type dnstapMinimiser struct {
 	log                   *slog.Logger         // any information logging is sent here
 	cryptopan             *cryptopan.Cryptopan // used for pseudonymising IP addresses
 	cryptopanCache        *lru.Cache[netip.Addr, netip.Addr]
+	promReg               *prometheus.Registry
 	cryptopanCacheHit     prometheus.Counter
 	cryptopanCacheEvicted prometheus.Counter
 	dnstapProcessed       prometheus.Counter
 	newQnameQueued        prometheus.Counter
 	newQnameDiscarded     prometheus.Counter
 	seenQnameLRUEvicted   prometheus.Counter
+	newQnameChannelLen    prometheus.Gauge
 	stop                  chan struct{} // close this channel to gracefully stop runMinimiser()
 	done                  chan struct{} // block on this channel to make sure output is flushed before exiting
 	debug                 bool          // if we should print debug messages during operation
@@ -679,6 +683,10 @@ func newDnstapMinimiser(logger *slog.Logger, cryptopanKey string, cryptopanSalt 
 	// Some more info at https://github.com/prometheus/client_golang/issues/716
 	promReg := prometheus.NewRegistry()
 
+	// Mimic default collectors used by the global prometheus instance
+	promReg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	promReg.MustRegister(collectors.NewGoCollector())
+
 	dtm.cryptopanCacheHit = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
 		Name: "dtm_cryptopan_lru_hit_total",
 		Help: "The total number of times we got a hit in the cryptopan address LRU cache",
@@ -709,6 +717,12 @@ func newDnstapMinimiser(logger *slog.Logger, cryptopanKey string, cryptopanSalt 
 		Help: "The total number of times something was evicted from the new_qname LRU cache",
 	})
 
+	dtm.newQnameChannelLen = promauto.With(promReg).NewGauge(prometheus.GaugeOpts{
+		Name: "dtm_new_qname_ch_len",
+		Help: "The number of new_qname events in the channel buffer",
+	})
+
+	dtm.promReg = promReg
 	dtm.stop = make(chan struct{})
 	dtm.done = make(chan struct{})
 	// Size 32 matches unexported "const outputChannelSize = 32" in
@@ -943,7 +957,7 @@ func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPu
 	go dtm.histogramSender(outboxDir, sentDir, aggSender, &wg)
 	go dtm.newQnamePublisher(newQnamePublisherCh, mqttPubCh, &wg, autopahoCtx)
 
-	go monitorChannelLen(newQnamePublisherCh)
+	go dtm.monitorChannelLen(newQnamePublisherCh)
 	go dtm.diskCleaner(&wg, sentDir)
 
 	dawgFinder, err := dawg.Load(dawgFile)
@@ -1128,14 +1142,10 @@ minimiserLoop:
 	close(dtm.done)
 }
 
-func monitorChannelLen(newQnamePublisherCh chan *protocols.EventsMqttMessageNewQnameJson) {
-	newQnameChannelLen := promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "dtm_new_qname_ch_len",
-		Help: "The number of new_qname events in the channel buffer",
-	})
+func (dtm *dnstapMinimiser) monitorChannelLen(newQnamePublisherCh chan *protocols.EventsMqttMessageNewQnameJson) {
 
 	for {
-		newQnameChannelLen.Set(float64(len(newQnamePublisherCh)))
+		dtm.newQnameChannelLen.Set(float64(len(newQnamePublisherCh)))
 		time.Sleep(time.Second * 1)
 	}
 }
