@@ -410,6 +410,14 @@ func TestPseudonymiseDnstap(t *testing.T) {
 		t.Fatal("unable to parse IPv6 ResponseAddress")
 	}
 
+	// Verify we are not accidentally getting IPv4-mapped IPv6 address
+	if !pseudoQueryAddr4.Is4() {
+		t.Fatalf("pseudonymised IPv4 query address appears to be IPv4-mapped IPv6 address: %s", pseudoQueryAddr4)
+	}
+	if !pseudoRespAddr4.Is4() {
+		t.Fatalf("pseudonymised IPv4 response address appears to be IPv4-mapped IPv6 address: %s", pseudoRespAddr4)
+	}
+
 	// Verify they are different from the original addresses
 	if origQueryAddr4 == pseudoQueryAddr4 {
 		t.Fatalf("pseudonymised IPv4 query address %s is the same as the orignal address %s", pseudoQueryAddr4, origQueryAddr4)
