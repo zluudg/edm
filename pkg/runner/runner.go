@@ -93,9 +93,7 @@ const (
 type histogramData struct {
 	// The time we started collecting the data contained in the histogram
 	StartTime int64 `parquet:"name=start_time, type=INT64, logicaltype=TIMESTAMP, logicaltype.isadjustedtoutc=true, logicaltype.unit=MICROS"`
-	// label fields must be exported as we set them using reflection,
-	// otherwise: "panic: reflect: reflect.Value.SetString using value obtained using unexported field"
-	// Also store them as pointers so we can signal them being unset as
+	// Store label fields as pointers so we can signal them being unset as
 	// opposed to an empty string
 	Label0        *string `parquet:"name=label0, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
 	Label1        *string `parquet:"name=label1, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
