@@ -13,7 +13,6 @@ import (
 
 	dnstap "github.com/dnstap/golang-dnstap"
 	"github.com/miekg/dns"
-	"github.com/segmentio/go-hll"
 	"github.com/smhanov/dawg"
 )
 
@@ -36,13 +35,9 @@ func BenchmarkWKDTIsKnown(b *testing.B) {
 		b.Error(err)
 	}
 
-	err = hll.Defaults(hll.Settings{
-		Log2m:             10,
-		Regwidth:          4,
-		ExplicitThreshold: hll.AutoExplicitThreshold, SparseEnabled: true,
-	})
+	err = setHllDefaults()
 	if err != nil {
-		b.Fatal(err)
+		b.Fatalf("unable to set Hll defaults: %s", err)
 	}
 
 	wkdTracker, err := newWellKnownDomainsTracker(dawgFinder)
@@ -93,7 +88,7 @@ func TestWKD(t *testing.T) {
 
 	dFinder := dBuilder.Finish()
 
-	var wkdTests = []struct {
+	var wkdDawgIndexTests = []struct {
 		name        string
 		domain      string
 		found       bool
@@ -130,7 +125,7 @@ func TestWKD(t *testing.T) {
 		t.Fatalf("unable to create well-known domains tracker: %s", err)
 	}
 
-	for _, test := range wkdTests {
+	for _, test := range wkdDawgIndexTests {
 		m := new(dns.Msg)
 		m.SetQuestion(test.domain, dns.TypeA)
 		i, suffixMatch := wkd.dawgIndex(m)
@@ -145,6 +140,58 @@ func TestWKD(t *testing.T) {
 
 		if suffixMatch != test.suffixMatch {
 			t.Fatalf("%s: suffix match mismatch for %s, expected: %t, have: %t", test.name, test.domain, test.suffixMatch, suffixMatch)
+		}
+	}
+
+	// Prepare for inserting Hll data when calling isKnown()
+	err = setHllDefaults()
+	if err != nil {
+		t.Fatalf("unable to set HLL defaults: %s", err)
+	}
+
+	queryAddr4 := netip.MustParseAddr("198.51.100.20")
+	queryAddr6 := netip.MustParseAddr("2001:db8:1122:3344:5566:7788:99aa:bbcc")
+
+	var wkdIsKnownTests = []struct {
+		name    string
+		domain  string
+		known   bool
+		address []byte
+	}{
+		{
+			name:    "known IPv4",
+			domain:  "example.com.",
+			known:   true,
+			address: queryAddr4.AsSlice(),
+		},
+		{
+			name:    "not known IPv4",
+			domain:  "www.example.com.",
+			known:   false,
+			address: queryAddr4.AsSlice(),
+		},
+		{
+			name:    "known IPv6",
+			domain:  "example.com.",
+			known:   true,
+			address: queryAddr6.AsSlice(),
+		},
+		{
+			name:    "not known IPv6",
+			domain:  "www.example.com.",
+			known:   false,
+			address: queryAddr6.AsSlice(),
+		},
+	}
+
+	for _, test := range wkdIsKnownTests {
+		m := new(dns.Msg)
+		m.SetQuestion(test.domain, dns.TypeA)
+
+		known := wkd.isKnown(test.address, m)
+
+		if test.known != known {
+			t.Fatalf("%s: unexpected known status, have: %t, want: %t", test.name, known, test.known)
 		}
 	}
 

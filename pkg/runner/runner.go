@@ -403,6 +403,16 @@ func configUpdater(viperNotifyCh chan fsnotify.Event, dtm *dnstapMinimiser) {
 	}
 }
 
+func setHllDefaults() error {
+	err := hll.Defaults(hll.Settings{
+		Log2m:             10,
+		Regwidth:          4,
+		ExplicitThreshold: hll.AutoExplicitThreshold, SparseEnabled: true,
+	})
+
+	return err
+}
+
 func Run() {
 
 	// Logger used for all output
@@ -571,15 +581,9 @@ func Run() {
 	dti.SetTimeout(time.Second * 5)
 	dti.SetLogger(log.Default())
 
-	// Set default values for HLL
-	err = hll.Defaults(hll.Settings{
-		Log2m:             10,
-		Regwidth:          4,
-		ExplicitThreshold: 0,
-		SparseEnabled:     true,
-	})
+	err = setHllDefaults()
 	if err != nil {
-		logger.Error("unable to set HLL defaults", "error", err)
+		logger.Error("unable to set Hll defaults", "error", err)
 		os.Exit(1)
 	}
 
