@@ -700,11 +700,11 @@ func Run() {
 	close(dtm.newQnamePublisherCh)
 
 	// Stop the MQTT publisher
-	dtm.log.Info("runMinimiser: stopping MQTT publisher")
+	dtm.log.Info("Run: stopping MQTT publisher")
 	autopahoCancel()
 
 	// Wait for all workers to exit
-	dtm.log.Info("runMinimiser: waiting for workers to exit")
+	dtm.log.Info("Run: waiting for workers to exit")
 	wg.Wait()
 
 	// Wait for graceful disconnection from MQTT bus
