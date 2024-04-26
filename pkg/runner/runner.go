@@ -685,6 +685,9 @@ func Run() {
 		}()
 	}
 
+	// Start data collector
+	go dtm.dataCollector(wkdTracker, dawgFile)
+
 	// Start minimiser
 	go dtm.runMinimiser(dawgFile, mqttPubCh, seenQnameLRU, pdb, viper.GetInt("new-qname-buffer"), autopahoCtx, viper.GetBool("disable-session-files"), debugDnstapFile, viper.GetBool("disable-histogram-sender"), labelLimit, wkdTracker)
 
@@ -732,6 +735,7 @@ type dnstapMinimiser struct {
 	sessionWriterCh       chan *prevSessions
 	histogramWriterCh     chan *wellKnownDomainsData
 	newQnamePublisherCh   chan *protocols.EventsMqttMessageNewQnameJson
+	sessionCollectorCh    chan *sessionData
 }
 
 func createCryptopan(key string, salt string) (*cryptopan.Cryptopan, error) {
@@ -819,6 +823,7 @@ func newDnstapMinimiser(logger *slog.Logger, cryptopanKey string, cryptopanSalt 
 	dtm.sessionWriterCh = make(chan *prevSessions, 100)
 	dtm.histogramWriterCh = make(chan *wellKnownDomainsData, 100)
 	dtm.newQnamePublisherCh = make(chan *protocols.EventsMqttMessageNewQnameJson, viper.GetInt("new-qname-buffer"))
+	dtm.sessionCollectorCh = make(chan *sessionData, 100)
 
 	return dtm, nil
 }
@@ -1018,14 +1023,6 @@ func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, mqttPubCh chan []byte,
 
 	dt := &dnstap.Dnstap{}
 
-	// Keep track of if we have recorded any dnstap packets in session data
-	var session_updated bool
-
-	sessions := []*sessionData{}
-
-	ticker := time.NewTicker(timeUntilNextMinute())
-	defer ticker.Stop()
-
 minimiserLoop:
 	for {
 		select {
@@ -1109,43 +1106,8 @@ minimiserLoop:
 
 			if !disableSessionFiles {
 				session := dtm.newSession(dt, msg, isQuery, labelLimit, timestamp)
-
-				sessions = append(sessions, session)
-
-				// Since we have appended at least one session in the
-				// sessions slice at this point we have things to write
-				// out.
-				session_updated = true
+				dtm.sessionCollectorCh <- session
 			}
-		case ts := <-ticker.C:
-			// We want to tick at the start of each minute
-			ticker.Reset(timeUntilNextMinute())
-
-			if session_updated {
-				ps := &prevSessions{
-					sessions:     sessions,
-					rotationTime: ts,
-				}
-
-				sessions = []*sessionData{}
-
-				// We have reset the sessions slice
-				session_updated = false
-
-				dtm.sessionWriterCh <- ps
-			}
-
-			prevWKD, err := wkdTracker.rotateTracker(dawgFile, ts)
-			if err != nil {
-				dtm.log.Error("unable to rotate histogram map", "error", err)
-				continue
-			}
-
-			// Only write out parquet file if there is something to write
-			if len(prevWKD.m) > 0 {
-				dtm.histogramWriterCh <- prevWKD
-			}
-
 		case <-dtm.stop:
 			break minimiserLoop
 		}
@@ -1801,4 +1763,53 @@ func (dtm *dnstapMinimiser) pseudonymiseIP(ipBytes []byte) ([]byte, error) {
 
 func timeUntilNextMinute() time.Duration {
 	return time.Second * time.Duration(60-time.Now().Second())
+}
+
+// runMinimiser generates data and it is collected into datasets here
+func (dtm *dnstapMinimiser) dataCollector(wkdTracker *wellKnownDomainsTracker, dawgFile string) {
+
+	// Keep track of if we have recorded any dnstap packets in session data
+	var session_updated bool
+
+	sessions := []*sessionData{}
+
+	ticker := time.NewTicker(timeUntilNextMinute())
+	defer ticker.Stop()
+
+	for {
+		select {
+		case sd := <-dtm.sessionCollectorCh:
+			sessions = append(sessions, sd)
+			session_updated = true
+
+		case ts := <-ticker.C:
+			// We want to tick at the start of each minute
+			ticker.Reset(timeUntilNextMinute())
+
+			if session_updated {
+				ps := &prevSessions{
+					sessions:     sessions,
+					rotationTime: ts,
+				}
+
+				sessions = []*sessionData{}
+
+				// We have reset the sessions slice
+				session_updated = false
+
+				dtm.sessionWriterCh <- ps
+			}
+
+			prevWKD, err := wkdTracker.rotateTracker(dawgFile, ts)
+			if err != nil {
+				dtm.log.Error("unable to rotate histogram map", "error", err)
+				continue
+			}
+
+			// Only write out parquet file if there is something to write
+			if len(prevWKD.m) > 0 {
+				dtm.histogramWriterCh <- prevWKD
+			}
+		}
+	}
 }
