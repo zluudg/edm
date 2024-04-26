@@ -50,6 +50,7 @@ func init() {
 	runCmd.Flags().String("cryptopan-key-salt", "dtm-kdf-salt-val", "the salt used for key derivation")
 	runCmd.Flags().String("well-known-domains", "well-known-domains.dawg", "the dawg file used for filtering well-known domains")
 	runCmd.Flags().String("data-dir", "/var/lib/dtm", "directory where output data is written")
+	runCmd.Flags().Int("minimiser-workers", 1, "how many minimiser workers to start (0 means same as GOMAXPROCS)")
 	runCmd.Flags().String("mqtt-signing-key-file", "dtm-mqtt-signer-key.pem", "ECSDSA key used for signing MQTT messages")
 	runCmd.Flags().String("mqtt-client-key-file", "dtm-mqtt-client-key.pem", "ECSDSA client key used for authenticating to MQTT bus")
 	runCmd.Flags().String("mqtt-client-cert-file", "dtm-mqtt-client.pem", "ECSDSA client cert used for authenticating to MQTT bus")

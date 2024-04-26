@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -688,14 +689,25 @@ func Run() {
 	// Start data collector
 	go dtm.dataCollector(&wg, wkdTracker, dawgFile)
 
+	var minimiserWg sync.WaitGroup
+
+	numMinimiserWorkers := viper.GetInt("minimiser-workers")
+	if numMinimiserWorkers <= 0 {
+		numMinimiserWorkers = runtime.GOMAXPROCS(0)
+	}
+
 	// Start minimiser
-	go dtm.runMinimiser(dawgFile, mqttPubCh, seenQnameLRU, pdb, viper.GetInt("new-qname-buffer"), autopahoCtx, viper.GetBool("disable-session-files"), debugDnstapFile, viper.GetBool("disable-histogram-sender"), labelLimit, wkdTracker)
+	for minimiserID := 0; minimiserID < numMinimiserWorkers; minimiserID++ {
+		dtm.log.Info("Run: starting minimiser worker", "minimiser_id", minimiserID)
+		minimiserWg.Add(1)
+		go dtm.runMinimiser(minimiserID, &minimiserWg, dawgFile, mqttPubCh, seenQnameLRU, pdb, viper.GetInt("new-qname-buffer"), autopahoCtx, viper.GetBool("disable-session-files"), debugDnstapFile, viper.GetBool("disable-histogram-sender"), labelLimit, wkdTracker)
+	}
 
 	// Start dnstap.Input
 	go dti.ReadInto(dtm.inputChannel)
 
-	// Wait here until runMinimiser() is done
-	<-dtm.done
+	// Wait here until all instances of runMinimiser() is done
+	minimiserWg.Wait()
 
 	// Make sure writers have completed their work
 	close(dtm.newQnamePublisherCh)
@@ -727,7 +739,6 @@ type dnstapMinimiser struct {
 	seenQnameLRUEvicted   prometheus.Counter
 	newQnameChannelLen    prometheus.Gauge
 	stop                  chan struct{} // close this channel to gracefully stop runMinimiser()
-	done                  chan struct{} // block on this channel to make sure output is flushed before exiting
 	debug                 bool          // if we should print debug messages during operation
 	mutex                 sync.RWMutex  // Mutex for protecting updates to fields at runtime
 	sessionWriterCh       chan *prevSessions
@@ -806,7 +817,6 @@ func newDnstapMinimiser(logger *slog.Logger, cryptopanKey string, cryptopanSalt 
 
 	dtm.promReg = promReg
 	dtm.stop = make(chan struct{})
-	dtm.done = make(chan struct{})
 	// Size 32 matches unexported "const outputChannelSize = 32" in
 	// https://github.com/dnstap/golang-dnstap/blob/master/dnstap.go
 	dtm.inputChannel = make(chan []byte, 32)
@@ -1017,7 +1027,8 @@ func (dtm *dnstapMinimiser) qnameSeen(msg *dns.Msg, seenQnameLRU *lru.Cache[stri
 // runMinimiser reads frames from the inputChannel, doing any modifications and
 // then passes them on to a dnstap.Output. To gracefully stop
 // runMinimiser() you need to close the dtm.stop channel.
-func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, mqttPubCh chan []byte, seenQnameLRU *lru.Cache[string, struct{}], pdb *pebble.DB, newQnameBuffer int, autopahoCtx context.Context, disableSessionFiles bool, debugDnstapFile *os.File, disableHistogramSender bool, labelLimit int, wkdTracker *wellKnownDomainsTracker) {
+func (dtm *dnstapMinimiser) runMinimiser(minimiserID int, wg *sync.WaitGroup, dawgFile string, mqttPubCh chan []byte, seenQnameLRU *lru.Cache[string, struct{}], pdb *pebble.DB, newQnameBuffer int, autopahoCtx context.Context, disableSessionFiles bool, debugDnstapFile *os.File, disableHistogramSender bool, labelLimit int, wkdTracker *wellKnownDomainsTracker) {
+	defer wg.Done()
 
 	dt := &dnstap.Dnstap{}
 
@@ -1027,7 +1038,7 @@ minimiserLoop:
 		case frame := <-dtm.inputChannel:
 			dtm.dnstapProcessed.Inc()
 			if err := proto.Unmarshal(frame, dt); err != nil {
-				dtm.log.Error("dnstapMinimiser.runMinimiser: proto.Unmarshal() failed, returning", "error", err)
+				dtm.log.Error("dnstapMinimiser.runMinimiser: proto.Unmarshal() failed, returning", "error", err, "minimiser_id", minimiserID)
 				break minimiserLoop
 			}
 
@@ -1045,13 +1056,13 @@ minimiserLoop:
 				} else {
 					_, err := debugDnstapFile.Write(out)
 					if err != nil {
-						dtm.log.Error("unable to write to dnstap debug file", "error", err, "filename", debugDnstapFile.Name())
+						dtm.log.Error("unable to write to dnstap debug file", "error", err, "filename", debugDnstapFile.Name(), "minimiser_id", minimiserID)
 					}
 				}
 			}
 
 			if dtm.debug {
-				dtm.log.Debug("dnstapMinimiser.runMinimiser: modifying dnstap message")
+				dtm.log.Debug("dnstapMinimiser.runMinimiser: modifying dnstap message", "minimiser_id", minimiserID)
 			}
 
 			// Keep around the unpseudonymised client IP for HLL
@@ -1071,12 +1082,12 @@ minimiserLoop:
 			// For cases where we were unable to unpack the DNS message we
 			// skip parsing.
 			if msg == nil || len(msg.Question) == 0 {
-				dtm.log.Error("unable to parse dnstap message, or no question section, skipping parsing")
+				dtm.log.Error("unable to parse dnstap message, or no question section, skipping parsing", "minimiser_id", minimiserID)
 				continue
 			}
 
 			if _, ok := dns.IsDomainName(msg.Question[0].Name); !ok {
-				dtm.log.Error("unable to parse question name, skipping parsing")
+				dtm.log.Error("unable to parse question name, skipping parsing", "minimiser_id", minimiserID)
 				continue
 			}
 
@@ -1084,7 +1095,7 @@ minimiserLoop:
 			// measurements.
 			if wkdTracker.isKnown(dangerRealClientIP, msg) {
 				if dtm.debug {
-					dtm.log.Debug("skipping well-known domain", "domain", msg.Question[0].Name)
+					dtm.log.Debug("skipping well-known domain", "domain", msg.Question[0].Name, "minimiser_id", minimiserID)
 				}
 				continue
 			}
@@ -1110,9 +1121,7 @@ minimiserLoop:
 			break minimiserLoop
 		}
 	}
-	// Signal main() that we are done and ready to exit
-	dtm.log.Info("runMinimiser: signaling we are done")
-	close(dtm.done)
+	dtm.log.Info("runMinimiser: exiting loop", "minimiser_id", minimiserID)
 }
 
 func (dtm *dnstapMinimiser) monitorChannelLen() {
