@@ -623,14 +623,89 @@ func Run() {
 		logger.Error("metricsServer failed", "error", err)
 	}()
 
+	var wg sync.WaitGroup
+
+	// Write histogram file to an outbox dir where it will get picked up by
+	// the histogram sender. Upon being sent it will be moved to the sent dir.
+	dataDir := viper.GetString("data-dir")
+	outboxDir := filepath.Join(dataDir, "parquet", "histograms", "outbox")
+	sentDir := filepath.Join(dataDir, "parquet", "histograms", "sent")
+
+	go dtm.monitorChannelLen()
+
+	// Labels 0-9
+	labelLimit := 10
+
+	disableHistogramSender := viper.GetBool("disable-histogram-sender")
+
+	// Start record writers and data senders in the background
+	go dtm.sessionWriter(dataDir, &wg)
+	go dtm.histogramWriter(labelLimit, outboxDir, &wg)
+	go dtm.histogramSender(outboxDir, sentDir, aggregSender, &wg, disableHistogramSender)
+	go dtm.newQnamePublisher(mqttPubCh, &wg, autopahoCtx)
+
+	go dtm.diskCleaner(&wg, sentDir)
+
+	dawgFile := viper.GetString("well-known-domains")
+
+	dawgFinder, err := dawg.Load(dawgFile)
+	if err != nil {
+		dtm.log.Error("unable to load DAWG file", "error", err.Error())
+		os.Exit(1)
+	}
+
+	wkdTracker, err := newWellKnownDomainsTracker(dawgFinder)
+	if err != nil {
+		dtm.log.Error(err.Error())
+		os.Exit(1)
+	}
+
+	debugDnstapFilename := viper.GetString("debug-dnstap-filename")
+
+	// Keep in mind that this file is unbuffered. We could wrap it in a
+	// bufio.NewWriter() if we want more performance out of it, but since
+	// it is meant for debugging purposes it is probably better to keep it
+	// unbuffered and more "reactive". Otherwise it is hard to be sure if
+	// you are not seeing anything in the log because packets are being
+	// missed, or you are just waiting on the buffer to be flushed.
+	var debugDnstapFile *os.File
+	if debugDnstapFilename != "" {
+		// Make gosec happy
+		debugDnstapFilename := filepath.Clean(debugDnstapFilename)
+		debugDnstapFile, err = os.OpenFile(debugDnstapFilename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+		if err != nil {
+			dtm.log.Error("unable to open debug dnstap file", "error", err.Error(), "filename", debugDnstapFilename)
+			os.Exit(1)
+		}
+		defer func() {
+			err := debugDnstapFile.Close()
+			if err != nil {
+				dtm.log.Error("unable to close debug dnstap file", "error", err, "filename", debugDnstapFile.Name())
+			}
+		}()
+	}
+
 	// Start minimiser
-	go dtm.runMinimiser(viper.GetString("well-known-domains"), viper.GetString("data-dir"), mqttPubCh, seenQnameLRU, pdb, viper.GetInt("new-qname-buffer"), aggregSender, autopahoCtx, autopahoCancel, viper.GetBool("disable-session-files"), viper.GetString("debug-dnstap-filename"), viper.GetBool("disable-histogram-sender"))
+	go dtm.runMinimiser(dawgFile, mqttPubCh, seenQnameLRU, pdb, viper.GetInt("new-qname-buffer"), autopahoCtx, viper.GetBool("disable-session-files"), debugDnstapFile, viper.GetBool("disable-histogram-sender"), labelLimit, wkdTracker)
 
 	// Start dnstap.Input
 	go dti.ReadInto(dtm.inputChannel)
 
 	// Wait here until runMinimiser() is done
 	<-dtm.done
+
+	// Make sure writers have completed their work
+	close(dtm.sessionWriterCh)
+	close(dtm.histogramWriterCh)
+	close(dtm.newQnamePublisherCh)
+
+	// Stop the MQTT publisher
+	dtm.log.Info("runMinimiser: stopping MQTT publisher")
+	autopahoCancel()
+
+	// Wait for all workers to exit
+	dtm.log.Info("runMinimiser: waiting for workers to exit")
+	wg.Wait()
 
 	// Wait for graceful disconnection from MQTT bus
 	dtm.log.Info("Run: waiting on MQTT disconnection")
@@ -654,6 +729,9 @@ type dnstapMinimiser struct {
 	done                  chan struct{} // block on this channel to make sure output is flushed before exiting
 	debug                 bool          // if we should print debug messages during operation
 	mutex                 sync.RWMutex  // Mutex for protecting updates to fields at runtime
+	sessionWriterCh       chan *prevSessions
+	histogramWriterCh     chan *wellKnownDomainsData
+	newQnamePublisherCh   chan *protocols.EventsMqttMessageNewQnameJson
 }
 
 func createCryptopan(key string, salt string) (*cryptopan.Cryptopan, error) {
@@ -732,6 +810,15 @@ func newDnstapMinimiser(logger *slog.Logger, cryptopanKey string, cryptopanSalt 
 	dtm.inputChannel = make(chan []byte, 32)
 	dtm.log = logger
 	dtm.debug = debug
+
+	// Setup channels for feeding writers and data senders that should do
+	// their work outside the main minimiser loop. They are buffered to
+	// to not block the loop if writing/sending data is slow.
+	// NOTE: Remember to close all of these channels at the end of the
+	// minimiser loop, otherwise the program can hang on shutdown.
+	dtm.sessionWriterCh = make(chan *prevSessions, 100)
+	dtm.histogramWriterCh = make(chan *wellKnownDomainsData, 100)
+	dtm.newQnamePublisherCh = make(chan *protocols.EventsMqttMessageNewQnameJson, viper.GetInt("new-qname-buffer"))
 
 	return dtm, nil
 }
@@ -927,77 +1014,14 @@ func (dtm *dnstapMinimiser) qnameSeen(msg *dns.Msg, seenQnameLRU *lru.Cache[stri
 // runMinimiser reads frames from the inputChannel, doing any modifications and
 // then passes them on to a dnstap.Output. To gracefully stop
 // runMinimiser() you need to close the dtm.stop channel.
-func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPubCh chan []byte, seenQnameLRU *lru.Cache[string, struct{}], pdb *pebble.DB, newQnameBuffer int, aggSender aggregateSender, autopahoCtx context.Context, autopahoCancel context.CancelFunc, disableSessionFiles bool, debugDnstapFilename string, disableHistogramSender bool) {
+func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, mqttPubCh chan []byte, seenQnameLRU *lru.Cache[string, struct{}], pdb *pebble.DB, newQnameBuffer int, autopahoCtx context.Context, disableSessionFiles bool, debugDnstapFile *os.File, disableHistogramSender bool, labelLimit int, wkdTracker *wellKnownDomainsTracker) {
 
 	dt := &dnstap.Dnstap{}
-
-	// Labels 0-9
-	labelLimit := 10
 
 	// Keep track of if we have recorded any dnstap packets in session data
 	var session_updated bool
 
-	// Setup channels for feeding writers and data senders that should do
-	// their work outside the main minimiser loop. They are buffered to
-	// to not block the loop if writing/sending data is slow.
-	// NOTE: Remember to close all of these channels at the end of the
-	// minimiser loop, otherwise the program can hang on shutdown.
-	sessionWriterCh := make(chan *prevSessions, 100)
-	histogramWriterCh := make(chan *wellKnownDomainsData, 100)
-	newQnamePublisherCh := make(chan *protocols.EventsMqttMessageNewQnameJson, newQnameBuffer)
-
-	var wg sync.WaitGroup
-
-	// Write histogram file to an outbox dir where it will get picked up by
-	// the histogram sender. Upon being sent it will be moved to the sent dir.
-	outboxDir := filepath.Join(dataDir, "parquet", "histograms", "outbox")
-	sentDir := filepath.Join(dataDir, "parquet", "histograms", "sent")
-
-	// Start record writers and data senders in the background
-	go dtm.sessionWriter(sessionWriterCh, dataDir, &wg)
-	go dtm.histogramWriter(histogramWriterCh, labelLimit, outboxDir, &wg)
-	go dtm.histogramSender(outboxDir, sentDir, aggSender, &wg, disableHistogramSender)
-	go dtm.newQnamePublisher(newQnamePublisherCh, mqttPubCh, &wg, autopahoCtx)
-
-	go dtm.monitorChannelLen(newQnamePublisherCh)
-	go dtm.diskCleaner(&wg, sentDir)
-
-	dawgFinder, err := dawg.Load(dawgFile)
-	if err != nil {
-		dtm.log.Error("unable to load DAWG file", "error", err.Error())
-		os.Exit(1)
-	}
-
-	wkdTracker, err := newWellKnownDomainsTracker(dawgFinder)
-	if err != nil {
-		dtm.log.Error(err.Error())
-		os.Exit(1)
-	}
-
 	sessions := []*sessionData{}
-
-	// Keep in mind that this file is unbuffered. We could wrap it in a
-	// bufio.NewWriter() if we want more performance out of it, but since
-	// it is meant for debugging purposes it is probably better to keep it
-	// unbuffered and more "reactive". Otherwise it is hard to be sure if
-	// you are not seeing anything in the log because packets are being
-	// missed, or you are just waiting on the buffer to be flushed.
-	var debugDnstapFile *os.File
-	if debugDnstapFilename != "" {
-		// Make gosec happy
-		debugDnstapFilename := filepath.Clean(debugDnstapFilename)
-		debugDnstapFile, err = os.OpenFile(debugDnstapFilename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
-		if err != nil {
-			dtm.log.Error("unable to open debug dnstap file", "error", err.Error(), "filename", debugDnstapFilename)
-			os.Exit(1)
-		}
-		defer func() {
-			err := debugDnstapFile.Close()
-			if err != nil {
-				dtm.log.Error("unable to close debug dnstap file", "error", err, "filename", debugDnstapFile.Name())
-			}
-		}()
-	}
 
 	ticker := time.NewTicker(timeUntilNextMinute())
 	defer ticker.Stop()
@@ -1075,7 +1099,7 @@ minimiserLoop:
 
 				// If the queue is full we skip sending new_qname events on the bus
 				select {
-				case newQnamePublisherCh <- &newQname:
+				case dtm.newQnamePublisherCh <- &newQname:
 					dtm.newQnameQueued.Inc()
 				default:
 					// If the publisher channel is full we skip creating an event.
@@ -1108,7 +1132,7 @@ minimiserLoop:
 				// We have reset the sessions slice
 				session_updated = false
 
-				sessionWriterCh <- ps
+				dtm.sessionWriterCh <- ps
 			}
 
 			prevWKD, err := wkdTracker.rotateTracker(dawgFile, ts)
@@ -1119,23 +1143,10 @@ minimiserLoop:
 
 			// Only write out parquet file if there is something to write
 			if len(prevWKD.m) > 0 {
-				histogramWriterCh <- prevWKD
+				dtm.histogramWriterCh <- prevWKD
 			}
 
 		case <-dtm.stop:
-			// Make sure writers have completed their work
-			close(sessionWriterCh)
-			close(histogramWriterCh)
-			close(newQnamePublisherCh)
-
-			// Stop the MQTT publisher
-			dtm.log.Info("runMinimiser: stopping MQTT publisher")
-			autopahoCancel()
-
-			// Wait for all workers to exit
-			dtm.log.Info("runMinimiser: waiting for workers to exit")
-			wg.Wait()
-
 			break minimiserLoop
 		}
 	}
@@ -1144,10 +1155,10 @@ minimiserLoop:
 	close(dtm.done)
 }
 
-func (dtm *dnstapMinimiser) monitorChannelLen(newQnamePublisherCh chan *protocols.EventsMqttMessageNewQnameJson) {
+func (dtm *dnstapMinimiser) monitorChannelLen() {
 
 	for {
-		dtm.newQnameChannelLen.Set(float64(len(newQnamePublisherCh)))
+		dtm.newQnameChannelLen.Set(float64(len(dtm.newQnamePublisherCh)))
 		time.Sleep(time.Second * 1)
 	}
 }
@@ -1240,10 +1251,10 @@ func (dtm *dnstapMinimiser) newSession(dt *dnstap.Dnstap, msg *dns.Msg, isQuery 
 	return sd
 }
 
-func (dtm *dnstapMinimiser) sessionWriter(ch chan *prevSessions, dataDir string, wg *sync.WaitGroup) {
+func (dtm *dnstapMinimiser) sessionWriter(dataDir string, wg *sync.WaitGroup) {
 	wg.Add(1)
 	defer wg.Done()
-	for ps := range ch {
+	for ps := range dtm.sessionWriterCh {
 		err := dtm.writeSessionParquet(ps, dataDir)
 		if err != nil {
 			dtm.log.Error("sessionWriter", "error", err.Error())
@@ -1253,10 +1264,10 @@ func (dtm *dnstapMinimiser) sessionWriter(ch chan *prevSessions, dataDir string,
 	dtm.log.Info("sessionStructWriter: exiting loop")
 }
 
-func (dtm *dnstapMinimiser) histogramWriter(ch chan *wellKnownDomainsData, labelLimit int, outboxDir string, wg *sync.WaitGroup) {
+func (dtm *dnstapMinimiser) histogramWriter(labelLimit int, outboxDir string, wg *sync.WaitGroup) {
 	wg.Add(1)
 	defer wg.Done()
-	for prevWellKnownDomainsData := range ch {
+	for prevWellKnownDomainsData := range dtm.histogramWriterCh {
 		err := dtm.writeHistogramParquet(prevWellKnownDomainsData, labelLimit, outboxDir)
 		if err != nil {
 			dtm.log.Error("histogramWriter", "error", err.Error())
@@ -1398,11 +1409,11 @@ func timestampsFromFilename(name string) (time.Time, time.Time, error) {
 	return startTime, stopTime, nil
 }
 
-func (dtm *dnstapMinimiser) newQnamePublisher(inputCh chan *protocols.EventsMqttMessageNewQnameJson, mqttPubCh chan []byte, wg *sync.WaitGroup, autopahoCtx context.Context) {
+func (dtm *dnstapMinimiser) newQnamePublisher(mqttPubCh chan []byte, wg *sync.WaitGroup, autopahoCtx context.Context) {
 	wg.Add(1)
 	defer wg.Done()
 
-	for newQname := range inputCh {
+	for newQname := range dtm.newQnamePublisherCh {
 		newQnameJSON, err := json.Marshal(newQname)
 		if err != nil {
 			dtm.log.Error("unable to create json for new_qname event", "error", err)
