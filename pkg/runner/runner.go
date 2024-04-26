@@ -686,7 +686,7 @@ func Run() {
 	}
 
 	// Start data collector
-	go dtm.dataCollector(wkdTracker, dawgFile)
+	go dtm.dataCollector(&wg, wkdTracker, dawgFile)
 
 	// Start minimiser
 	go dtm.runMinimiser(dawgFile, mqttPubCh, seenQnameLRU, pdb, viper.GetInt("new-qname-buffer"), autopahoCtx, viper.GetBool("disable-session-files"), debugDnstapFile, viper.GetBool("disable-histogram-sender"), labelLimit, wkdTracker)
@@ -698,8 +698,6 @@ func Run() {
 	<-dtm.done
 
 	// Make sure writers have completed their work
-	close(dtm.sessionWriterCh)
-	close(dtm.histogramWriterCh)
 	close(dtm.newQnamePublisherCh)
 
 	// Stop the MQTT publisher
@@ -1766,7 +1764,9 @@ func timeUntilNextMinute() time.Duration {
 }
 
 // runMinimiser generates data and it is collected into datasets here
-func (dtm *dnstapMinimiser) dataCollector(wkdTracker *wellKnownDomainsTracker, dawgFile string) {
+func (dtm *dnstapMinimiser) dataCollector(wg *sync.WaitGroup, wkdTracker *wellKnownDomainsTracker, dawgFile string) {
+	wg.Add(1)
+	defer wg.Done()
 
 	// Keep track of if we have recorded any dnstap packets in session data
 	var session_updated bool
@@ -1776,6 +1776,7 @@ func (dtm *dnstapMinimiser) dataCollector(wkdTracker *wellKnownDomainsTracker, d
 	ticker := time.NewTicker(timeUntilNextMinute())
 	defer ticker.Stop()
 
+collectorLoop:
 	for {
 		select {
 		case sd := <-dtm.sessionCollectorCh:
@@ -1810,6 +1811,14 @@ func (dtm *dnstapMinimiser) dataCollector(wkdTracker *wellKnownDomainsTracker, d
 			if len(prevWKD.m) > 0 {
 				dtm.histogramWriterCh <- prevWKD
 			}
+		case <-dtm.stop:
+			break collectorLoop
 		}
 	}
+
+	// Close the channels we write to
+	close(dtm.sessionWriterCh)
+	close(dtm.histogramWriterCh)
+
+	dtm.log.Info("dataCollector: exiting loop")
 }
