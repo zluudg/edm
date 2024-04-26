@@ -624,7 +624,7 @@ func Run() {
 	}()
 
 	// Start minimiser
-	go dtm.runMinimiser(viper.GetString("well-known-domains"), viper.GetString("data-dir"), mqttPubCh, seenQnameLRU, pdb, viper.GetInt("new-qname-buffer"), aggregSender, autopahoCtx, autopahoCancel, viper.GetBool("disable-session-files"), viper.GetString("debug-dnstap-filename"))
+	go dtm.runMinimiser(viper.GetString("well-known-domains"), viper.GetString("data-dir"), mqttPubCh, seenQnameLRU, pdb, viper.GetInt("new-qname-buffer"), aggregSender, autopahoCtx, autopahoCancel, viper.GetBool("disable-session-files"), viper.GetString("debug-dnstap-filename"), viper.GetBool("disable-histogram-sender"))
 
 	// Start dnstap.Input
 	go dti.ReadInto(dtm.inputChannel)
@@ -927,7 +927,7 @@ func (dtm *dnstapMinimiser) qnameSeen(msg *dns.Msg, seenQnameLRU *lru.Cache[stri
 // runMinimiser reads frames from the inputChannel, doing any modifications and
 // then passes them on to a dnstap.Output. To gracefully stop
 // runMinimiser() you need to close the dtm.stop channel.
-func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPubCh chan []byte, seenQnameLRU *lru.Cache[string, struct{}], pdb *pebble.DB, newQnameBuffer int, aggSender aggregateSender, autopahoCtx context.Context, autopahoCancel context.CancelFunc, disableSessionFiles bool, debugDnstapFilename string) {
+func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPubCh chan []byte, seenQnameLRU *lru.Cache[string, struct{}], pdb *pebble.DB, newQnameBuffer int, aggSender aggregateSender, autopahoCtx context.Context, autopahoCancel context.CancelFunc, disableSessionFiles bool, debugDnstapFilename string, disableHistogramSender bool) {
 
 	dt := &dnstap.Dnstap{}
 
@@ -956,7 +956,7 @@ func (dtm *dnstapMinimiser) runMinimiser(dawgFile string, dataDir string, mqttPu
 	// Start record writers and data senders in the background
 	go dtm.sessionWriter(sessionWriterCh, dataDir, &wg)
 	go dtm.histogramWriter(histogramWriterCh, labelLimit, outboxDir, &wg)
-	go dtm.histogramSender(outboxDir, sentDir, aggSender, &wg)
+	go dtm.histogramSender(outboxDir, sentDir, aggSender, &wg, disableHistogramSender)
 	go dtm.newQnamePublisher(newQnamePublisherCh, mqttPubCh, &wg, autopahoCtx)
 
 	go dtm.monitorChannelLen(newQnamePublisherCh)
@@ -1325,7 +1325,7 @@ func (dtm *dnstapMinimiser) createFile(dst string) (*os.File, error) {
 	}
 }
 
-func (dtm *dnstapMinimiser) histogramSender(outboxDir string, sentDir string, aggSender aggregateSender, wg *sync.WaitGroup) {
+func (dtm *dnstapMinimiser) histogramSender(outboxDir string, sentDir string, aggSender aggregateSender, wg *sync.WaitGroup, disabled bool) {
 	wg.Add(1)
 	defer wg.Done()
 
@@ -1338,6 +1338,9 @@ timerLoop:
 	for {
 		select {
 		case <-ticker.C:
+			if disabled {
+				continue
+			}
 			dirEntries, err := os.ReadDir(outboxDir)
 			if err != nil {
 				if errors.Is(err, fs.ErrNotExist) {
