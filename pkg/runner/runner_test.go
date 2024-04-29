@@ -483,7 +483,7 @@ func TestPseudonymiseDnstap(t *testing.T) {
 
 	cryptopanCacheSize := 10
 
-	dtm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false)
+	dtm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false, false)
 	if err != nil {
 		t.Fatalf("unable to setup dtm: %s", err)
 	}
@@ -714,7 +714,7 @@ func BenchmarkPseudonymiseDnstapWithCache4(b *testing.B) {
 
 	cryptopanCacheSize := 10
 
-	dtm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false)
+	dtm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false, false)
 	if err != nil {
 		b.Fatalf("unable to setup dtm: %s", err)
 	}
@@ -747,7 +747,7 @@ func BenchmarkPseudonymiseDnstapWithoutCache4(b *testing.B) {
 
 	cryptopanCacheSize := 0
 
-	dtm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false)
+	dtm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false, false)
 	if err != nil {
 		b.Fatalf("unable to setup dtm: %s", err)
 	}
@@ -780,7 +780,7 @@ func BenchmarkPseudonymiseDnstapWithCache6(b *testing.B) {
 
 	cryptopanCacheSize := 10
 
-	dtm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false)
+	dtm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false, false)
 	if err != nil {
 		b.Fatalf("unable to setup dtm: %s", err)
 	}
@@ -813,7 +813,7 @@ func BenchmarkPseudonymiseDnstapWithoutCache6(b *testing.B) {
 
 	cryptopanCacheSize := 0
 
-	dtm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false)
+	dtm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false, false)
 	if err != nil {
 		b.Fatalf("unable to setup dtm: %s", err)
 	}

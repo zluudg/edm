@@ -414,6 +414,40 @@ func setHllDefaults() error {
 	return err
 }
 
+func (dtm *dnstapMinimiser) setupHistogramSender() {
+	httpURL, err := url.Parse(viper.GetString("http-url"))
+	if err != nil {
+		dtm.log.Error("unable to parse 'http-url' setting", "error", err)
+		os.Exit(1)
+	}
+
+	httpSigningKey, err := ecdsaPrivateKeyFromFile(viper.GetString("http-signing-key-file"))
+	if err != nil {
+		dtm.log.Error("unable to parse key material from 'http-signing-key-file'", "error", err)
+		os.Exit(1)
+	}
+
+	// Leaving these nil will use the OS default CA certs
+	var httpCACertPool *x509.CertPool
+
+	if viper.GetString("http-ca-file") != "" {
+		// Setup CA cert for validating the aggregate-receiver connection
+		httpCACertPool, err = certPoolFromFile(viper.GetString("http-ca-file"))
+		if err != nil {
+			dtm.log.Error("failed to create CA cert pool for '-http-ca-file'", "error", err)
+			os.Exit(1)
+		}
+	}
+
+	httpClientCert, err := tls.LoadX509KeyPair(viper.GetString("http-client-cert-file"), viper.GetString("http-client-key-file"))
+	if err != nil {
+		dtm.log.Error("unable to load x509 HTTP client cert", "error", err)
+		os.Exit(1)
+	}
+
+	dtm.aggregSender = dtm.newAggregateSender(httpURL, viper.GetString("http-signing-key-id"), httpSigningKey, httpCACertPool, httpClientCert)
+}
+
 func (dtm *dnstapMinimiser) setupMQTT() {
 	mqttSigningKey, err := ecdsaPrivateKeyFromFile(viper.GetString("mqtt-signing-key-file"))
 	if err != nil {
@@ -484,38 +518,8 @@ func Run() {
 		os.Exit(1)
 	}
 
-	httpURL, err := url.Parse(viper.GetString("http-url"))
-	if err != nil {
-		logger.Error("unable to parse 'http-url' setting", "error", err)
-		os.Exit(1)
-	}
-
-	httpSigningKey, err := ecdsaPrivateKeyFromFile(viper.GetString("http-signing-key-file"))
-	if err != nil {
-		logger.Error("unable to parse key material from 'http-signing-key-file'", "error", err)
-		os.Exit(1)
-	}
-
-	// Leaving these nil will use the OS default CA certs
-	var httpCACertPool *x509.CertPool
-
-	if viper.GetString("http-ca-file") != "" {
-		// Setup CA cert for validating the aggregate-receiver connection
-		httpCACertPool, err = certPoolFromFile(viper.GetString("http-ca-file"))
-		if err != nil {
-			logger.Error("failed to create CA cert pool for '-http-ca-file'", "error", err)
-			os.Exit(1)
-		}
-	}
-
-	httpClientCert, err := tls.LoadX509KeyPair(viper.GetString("http-client-cert-file"), viper.GetString("http-client-key-file"))
-	if err != nil {
-		logger.Error("unable to load x509 HTTP client cert", "error", err)
-		os.Exit(1)
-	}
-
 	// Create an instance of the minimiser
-	dtm, err := newDnstapMinimiser(logger, viper.GetString("cryptopan-key"), viper.GetString("cryptopan-key-salt"), viper.GetInt("cryptopan-address-entries"), viper.GetBool("debug"), viper.GetBool("disable-mqtt"))
+	dtm, err := newDnstapMinimiser(logger, viper.GetString("cryptopan-key"), viper.GetString("cryptopan-key-salt"), viper.GetInt("cryptopan-address-entries"), viper.GetBool("debug"), viper.GetBool("disable-histogram-sender"), viper.GetBool("disable-mqtt"))
 	if err != nil {
 		logger.Error("unable to init dtm", "error", err)
 		os.Exit(1)
@@ -541,6 +545,10 @@ func Run() {
 			dtm.log.Error("unable to close pebble database", "error", err)
 		}
 	}()
+
+	if !dtm.histogramSenderDisabled {
+		dtm.setupHistogramSender()
+	}
 
 	if !dtm.mqttDisabled {
 		dtm.setupMQTT()
@@ -614,8 +622,6 @@ func Run() {
 		os.Exit(1)
 	}
 
-	aggregSender := dtm.newAggregateSender(httpURL, viper.GetString("http-signing-key-id"), httpSigningKey, httpCACertPool, httpClientCert)
-
 	// Exit gracefully on SIGINT or SIGTERM
 	go func() {
 		sigs := make(chan os.Signal, 1)
@@ -653,12 +659,12 @@ func Run() {
 	// Labels 0-9
 	labelLimit := 10
 
-	disableHistogramSender := viper.GetBool("disable-histogram-sender")
-
 	// Start record writers and data senders in the background
 	go dtm.sessionWriter(dataDir, &wg)
 	go dtm.histogramWriter(labelLimit, outboxDir, &wg)
-	go dtm.histogramSender(outboxDir, sentDir, aggregSender, &wg, disableHistogramSender)
+	if !dtm.histogramSenderDisabled {
+		go dtm.histogramSender(outboxDir, sentDir, &wg)
+	}
 	if !dtm.mqttDisabled {
 		go dtm.newQnamePublisher(&wg)
 	}
@@ -725,7 +731,6 @@ func Run() {
 	go dti.ReadInto(dtm.inputChannel)
 
 	// Wait here until all instances of runMinimiser() is done
-	dtm.log.Info("Run: waiting for minimiser workers to exit")
 	minimiserWg.Wait()
 
 	// Make sure writers have completed their work
@@ -749,30 +754,32 @@ func Run() {
 }
 
 type dnstapMinimiser struct {
-	inputChannel          chan []byte          // the channel expected to be passed to dnstap ReadInto()
-	log                   *slog.Logger         // any information logging is sent here
-	cryptopan             *cryptopan.Cryptopan // used for pseudonymising IP addresses
-	cryptopanCache        *lru.Cache[netip.Addr, netip.Addr]
-	promReg               *prometheus.Registry
-	cryptopanCacheHit     prometheus.Counter
-	cryptopanCacheEvicted prometheus.Counter
-	dnstapProcessed       prometheus.Counter
-	newQnameQueued        prometheus.Counter
-	newQnameDiscarded     prometheus.Counter
-	seenQnameLRUEvicted   prometheus.Counter
-	newQnameChannelLen    prometheus.Gauge
-	stop                  chan struct{} // close this channel to gracefully stop runMinimiser()
-	debug                 bool          // if we should print debug messages during operation
-	mutex                 sync.RWMutex  // Mutex for protecting updates to fields at runtime
-	sessionWriterCh       chan *prevSessions
-	histogramWriterCh     chan *wellKnownDomainsData
-	newQnamePublisherCh   chan *protocols.EventsMqttMessageNewQnameJson
-	sessionCollectorCh    chan *sessionData
-	mqttDisabled          bool
-	mqttPubCh             chan []byte
-	autopahoCtx           context.Context
-	autopahoCancel        context.CancelFunc
-	autopahoWg            sync.WaitGroup
+	inputChannel            chan []byte          // the channel expected to be passed to dnstap ReadInto()
+	log                     *slog.Logger         // any information logging is sent here
+	cryptopan               *cryptopan.Cryptopan // used for pseudonymising IP addresses
+	cryptopanCache          *lru.Cache[netip.Addr, netip.Addr]
+	promReg                 *prometheus.Registry
+	cryptopanCacheHit       prometheus.Counter
+	cryptopanCacheEvicted   prometheus.Counter
+	dnstapProcessed         prometheus.Counter
+	newQnameQueued          prometheus.Counter
+	newQnameDiscarded       prometheus.Counter
+	seenQnameLRUEvicted     prometheus.Counter
+	newQnameChannelLen      prometheus.Gauge
+	stop                    chan struct{} // close this channel to gracefully stop runMinimiser()
+	debug                   bool          // if we should print debug messages during operation
+	mutex                   sync.RWMutex  // Mutex for protecting updates to fields at runtime
+	sessionWriterCh         chan *prevSessions
+	histogramWriterCh       chan *wellKnownDomainsData
+	newQnamePublisherCh     chan *protocols.EventsMqttMessageNewQnameJson
+	sessionCollectorCh      chan *sessionData
+	histogramSenderDisabled bool
+	aggregSender            aggregateSender
+	mqttDisabled            bool
+	mqttPubCh               chan []byte
+	autopahoCtx             context.Context
+	autopahoCancel          context.CancelFunc
+	autopahoWg              sync.WaitGroup
 }
 
 func createCryptopan(key string, salt string) (*cryptopan.Cryptopan, error) {
@@ -787,7 +794,7 @@ func createCryptopan(key string, salt string) (*cryptopan.Cryptopan, error) {
 	return cpn, nil
 }
 
-func newDnstapMinimiser(logger *slog.Logger, cryptopanKey string, cryptopanSalt string, cryptopanCacheEntries int, debug bool, mqttDisabled bool) (*dnstapMinimiser, error) {
+func newDnstapMinimiser(logger *slog.Logger, cryptopanKey string, cryptopanSalt string, cryptopanCacheEntries int, debug bool, histogramSenderDisabled bool, mqttDisabled bool) (*dnstapMinimiser, error) {
 	dtm := &dnstapMinimiser{}
 
 	err := dtm.setCryptopan(cryptopanKey, cryptopanSalt, cryptopanCacheEntries)
@@ -850,6 +857,7 @@ func newDnstapMinimiser(logger *slog.Logger, cryptopanKey string, cryptopanSalt 
 	dtm.inputChannel = make(chan []byte, 32)
 	dtm.log = logger
 	dtm.debug = debug
+	dtm.histogramSenderDisabled = histogramSenderDisabled
 	dtm.mqttDisabled = mqttDisabled
 
 	// Setup channels for feeding writers and data senders that should do
@@ -1253,6 +1261,9 @@ func (dtm *dnstapMinimiser) newSession(dt *dnstap.Dnstap, msg *dns.Msg, isQuery 
 func (dtm *dnstapMinimiser) sessionWriter(dataDir string, wg *sync.WaitGroup) {
 	wg.Add(1)
 	defer wg.Done()
+
+	dtm.log.Info("sessionStructWriter: starting")
+
 	for ps := range dtm.sessionWriterCh {
 		err := dtm.writeSessionParquet(ps, dataDir)
 		if err != nil {
@@ -1266,6 +1277,9 @@ func (dtm *dnstapMinimiser) sessionWriter(dataDir string, wg *sync.WaitGroup) {
 func (dtm *dnstapMinimiser) histogramWriter(labelLimit int, outboxDir string, wg *sync.WaitGroup) {
 	wg.Add(1)
 	defer wg.Done()
+
+	dtm.log.Info("histogramWriter: starting")
+
 	for prevWellKnownDomainsData := range dtm.histogramWriterCh {
 		err := dtm.writeHistogramParquet(prevWellKnownDomainsData, labelLimit, outboxDir)
 		if err != nil {
@@ -1335,9 +1349,11 @@ func (dtm *dnstapMinimiser) createFile(dst string) (*os.File, error) {
 	}
 }
 
-func (dtm *dnstapMinimiser) histogramSender(outboxDir string, sentDir string, aggSender aggregateSender, wg *sync.WaitGroup, disabled bool) {
+func (dtm *dnstapMinimiser) histogramSender(outboxDir string, sentDir string, wg *sync.WaitGroup) {
 	wg.Add(1)
 	defer wg.Done()
+
+	dtm.log.Info("histogramSender: starting")
 
 	// We will scan the outbox directory each tick for histogram parquet
 	// files to send
@@ -1348,9 +1364,6 @@ timerLoop:
 	for {
 		select {
 		case <-ticker.C:
-			if disabled {
-				continue
-			}
 			dirEntries, err := os.ReadDir(outboxDir)
 			if err != nil {
 				if errors.Is(err, fs.ErrNotExist) {
@@ -1374,7 +1387,7 @@ timerLoop:
 
 					absPath := filepath.Join(outboxDir, dirEntry.Name())
 					absPathSent := filepath.Join(sentDir, dirEntry.Name())
-					err = aggSender.send(absPath, startTS, duration)
+					err = dtm.aggregSender.send(absPath, startTS, duration)
 					if err != nil {
 						dtm.log.Error("histogramSender: unable to send histogram file", "error", err)
 					}
@@ -1411,6 +1424,8 @@ func timestampsFromFilename(name string) (time.Time, time.Time, error) {
 func (dtm *dnstapMinimiser) newQnamePublisher(wg *sync.WaitGroup) {
 	wg.Add(1)
 	defer wg.Done()
+
+	dtm.log.Info("newQnamePublisher: starting")
 
 	for newQname := range dtm.newQnamePublisherCh {
 		newQnameJSON, err := json.Marshal(newQname)
