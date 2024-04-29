@@ -414,6 +414,62 @@ func setHllDefaults() error {
 	return err
 }
 
+func (dtm *dnstapMinimiser) setupMQTT() {
+	mqttSigningKey, err := ecdsaPrivateKeyFromFile(viper.GetString("mqtt-signing-key-file"))
+	if err != nil {
+		dtm.log.Error("unable to parse key material from 'mqtt-signing-key-file'", "error", err)
+		os.Exit(1)
+	}
+
+	// Leaving these nil will use the OS default CA certs
+	var mqttCACertPool *x509.CertPool
+
+	if viper.GetString("mqtt-ca-file") != "" {
+		// Setup CA cert for validating the MQTT connection
+		mqttCACertPool, err = certPoolFromFile(viper.GetString("mqtt-ca-file"))
+		if err != nil {
+			dtm.log.Error("failed to create CA cert pool for '--mqtt-ca-file'", "error", err)
+			os.Exit(1)
+		}
+	}
+
+	if viper.GetString("mqtt-ca-file") != "" {
+		// Setup CA cert for validating the MQTT connection
+		mqttCACertPool, err = certPoolFromFile(viper.GetString("mqtt-ca-file"))
+		if err != nil {
+			dtm.log.Error("failed to create CA cert pool for '--mqtt-ca-file'", "error", err)
+			os.Exit(1)
+		}
+	}
+
+	// Setup client cert/key for mTLS authentication
+	mqttClientCert, err := tls.LoadX509KeyPair(viper.GetString("mqtt-client-cert-file"), viper.GetString("mqtt-client-key-file"))
+	if err != nil {
+		dtm.log.Error("unable to load x509 mqtt client cert", "error", err)
+		os.Exit(1)
+	}
+
+	autopahoConfig, err := dtm.newAutoPahoClientConfig(mqttCACertPool, viper.GetString("mqtt-server"), viper.GetString("mqtt-client-id"), mqttClientCert, uint16(viper.GetInt("mqtt-keepalive")))
+	if err != nil {
+		dtm.log.Error("unable to create autopaho config", "error", err)
+		os.Exit(1)
+	}
+
+	dtm.autopahoCtx, dtm.autopahoCancel = context.WithCancel(context.Background())
+
+	autopahoCm, err := autopaho.NewConnection(dtm.autopahoCtx, autopahoConfig)
+	if err != nil {
+		dtm.log.Error("unable to create autopaho connection manager", "error", err)
+		os.Exit(1)
+	}
+
+	// Setup channel for reading messages to publish
+	dtm.mqttPubCh = make(chan []byte, 100)
+
+	// Connect to the broker - this will return immediately after initiating the connection process
+	go dtm.runAutoPaho(autopahoCm, viper.GetString("mqtt-topic"), mqttSigningKey)
+}
+
 func Run() {
 
 	// Logger used for all output
@@ -434,12 +490,6 @@ func Run() {
 		os.Exit(1)
 	}
 
-	mqttSigningKey, err := ecdsaPrivateKeyFromFile(viper.GetString("mqtt-signing-key-file"))
-	if err != nil {
-		logger.Error("unable to parse key material from 'mqtt-signing-key-file'", "error", err)
-		os.Exit(1)
-	}
-
 	httpSigningKey, err := ecdsaPrivateKeyFromFile(viper.GetString("http-signing-key-file"))
 	if err != nil {
 		logger.Error("unable to parse key material from 'http-signing-key-file'", "error", err)
@@ -447,24 +497,7 @@ func Run() {
 	}
 
 	// Leaving these nil will use the OS default CA certs
-	var mqttCACertPool *x509.CertPool
 	var httpCACertPool *x509.CertPool
-
-	if viper.GetString("mqtt-ca-file") != "" {
-		// Setup CA cert for validating the MQTT connection
-		mqttCACertPool, err = certPoolFromFile(viper.GetString("mqtt-ca-file"))
-		if err != nil {
-			logger.Error("failed to create CA cert pool for '--mqtt-ca-file'", "error", err)
-			os.Exit(1)
-		}
-	}
-
-	// Setup client cert/key for mTLS authentication
-	mqttClientCert, err := tls.LoadX509KeyPair(viper.GetString("mqtt-client-cert-file"), viper.GetString("mqtt-client-key-file"))
-	if err != nil {
-		logger.Error("unable to load x509 mqtt client cert", "error", err)
-		os.Exit(1)
-	}
 
 	if viper.GetString("http-ca-file") != "" {
 		// Setup CA cert for validating the aggregate-receiver connection
@@ -482,7 +515,7 @@ func Run() {
 	}
 
 	// Create an instance of the minimiser
-	dtm, err := newDnstapMinimiser(logger, viper.GetString("cryptopan-key"), viper.GetString("cryptopan-key-salt"), viper.GetInt("cryptopan-address-entries"), viper.GetBool("debug"))
+	dtm, err := newDnstapMinimiser(logger, viper.GetString("cryptopan-key"), viper.GetString("cryptopan-key-salt"), viper.GetInt("cryptopan-address-entries"), viper.GetBool("debug"), viper.GetBool("disable-mqtt"))
 	if err != nil {
 		logger.Error("unable to init dtm", "error", err)
 		os.Exit(1)
@@ -509,26 +542,9 @@ func Run() {
 		}
 	}()
 
-	autopahoConfig, err := dtm.newAutoPahoClientConfig(mqttCACertPool, viper.GetString("mqtt-server"), viper.GetString("mqtt-client-id"), mqttClientCert, uint16(viper.GetInt("mqtt-keepalive")))
-	if err != nil {
-		logger.Error("unable to create autopaho config", "error", err)
-		os.Exit(1)
+	if !dtm.mqttDisabled {
+		dtm.setupMQTT()
 	}
-
-	autopahoCtx, autopahoCancel := context.WithCancel(context.Background())
-
-	// Connect to the broker - this will return immediately after initiating the connection process
-	autopahoCm, err := autopaho.NewConnection(autopahoCtx, autopahoConfig)
-	if err != nil {
-		panic(err)
-	}
-
-	var autopahoWg sync.WaitGroup
-
-	// Setup channel for reading messages to publish
-	mqttPubCh := make(chan []byte, 100)
-
-	go runAutoPaho(autopahoCtx, &autopahoWg, autopahoCm, dtm, mqttPubCh, viper.GetString("mqtt-topic"), mqttSigningKey)
 
 	// Setup the dnstap.Input, only one at a time is supported.
 	var dti *dnstap.FrameStreamSockInput
@@ -643,7 +659,9 @@ func Run() {
 	go dtm.sessionWriter(dataDir, &wg)
 	go dtm.histogramWriter(labelLimit, outboxDir, &wg)
 	go dtm.histogramSender(outboxDir, sentDir, aggregSender, &wg, disableHistogramSender)
-	go dtm.newQnamePublisher(mqttPubCh, &wg, autopahoCtx)
+	if !dtm.mqttDisabled {
+		go dtm.newQnamePublisher(&wg)
+	}
 
 	go dtm.diskCleaner(&wg, sentDir)
 
@@ -700,29 +718,34 @@ func Run() {
 	for minimiserID := 0; minimiserID < numMinimiserWorkers; minimiserID++ {
 		dtm.log.Info("Run: starting minimiser worker", "minimiser_id", minimiserID)
 		minimiserWg.Add(1)
-		go dtm.runMinimiser(minimiserID, &minimiserWg, dawgFile, mqttPubCh, seenQnameLRU, pdb, viper.GetInt("new-qname-buffer"), autopahoCtx, viper.GetBool("disable-session-files"), debugDnstapFile, viper.GetBool("disable-histogram-sender"), labelLimit, wkdTracker)
+		go dtm.runMinimiser(minimiserID, &minimiserWg, dawgFile, seenQnameLRU, pdb, viper.GetInt("new-qname-buffer"), viper.GetBool("disable-session-files"), debugDnstapFile, viper.GetBool("disable-histogram-sender"), labelLimit, wkdTracker)
 	}
 
 	// Start dnstap.Input
 	go dti.ReadInto(dtm.inputChannel)
 
 	// Wait here until all instances of runMinimiser() is done
+	dtm.log.Info("Run: waiting for minimiser workers to exit")
 	minimiserWg.Wait()
 
 	// Make sure writers have completed their work
 	close(dtm.newQnamePublisherCh)
 
 	// Stop the MQTT publisher
-	dtm.log.Info("Run: stopping MQTT publisher")
-	autopahoCancel()
+	if !dtm.mqttDisabled {
+		dtm.log.Info("Run: stopping MQTT publisher")
+		dtm.autopahoCancel()
+	}
 
 	// Wait for all workers to exit
-	dtm.log.Info("Run: waiting for workers to exit")
+	dtm.log.Info("Run: waiting for other workers to exit")
 	wg.Wait()
 
 	// Wait for graceful disconnection from MQTT bus
-	dtm.log.Info("Run: waiting on MQTT disconnection")
-	autopahoWg.Wait()
+	if !dtm.mqttDisabled {
+		dtm.log.Info("Run: waiting on MQTT disconnection")
+		dtm.autopahoWg.Wait()
+	}
 }
 
 type dnstapMinimiser struct {
@@ -745,6 +768,11 @@ type dnstapMinimiser struct {
 	histogramWriterCh     chan *wellKnownDomainsData
 	newQnamePublisherCh   chan *protocols.EventsMqttMessageNewQnameJson
 	sessionCollectorCh    chan *sessionData
+	mqttDisabled          bool
+	mqttPubCh             chan []byte
+	autopahoCtx           context.Context
+	autopahoCancel        context.CancelFunc
+	autopahoWg            sync.WaitGroup
 }
 
 func createCryptopan(key string, salt string) (*cryptopan.Cryptopan, error) {
@@ -759,7 +787,7 @@ func createCryptopan(key string, salt string) (*cryptopan.Cryptopan, error) {
 	return cpn, nil
 }
 
-func newDnstapMinimiser(logger *slog.Logger, cryptopanKey string, cryptopanSalt string, cryptopanCacheEntries int, debug bool) (*dnstapMinimiser, error) {
+func newDnstapMinimiser(logger *slog.Logger, cryptopanKey string, cryptopanSalt string, cryptopanCacheEntries int, debug bool, mqttDisabled bool) (*dnstapMinimiser, error) {
 	dtm := &dnstapMinimiser{}
 
 	err := dtm.setCryptopan(cryptopanKey, cryptopanSalt, cryptopanCacheEntries)
@@ -822,6 +850,7 @@ func newDnstapMinimiser(logger *slog.Logger, cryptopanKey string, cryptopanSalt 
 	dtm.inputChannel = make(chan []byte, 32)
 	dtm.log = logger
 	dtm.debug = debug
+	dtm.mqttDisabled = mqttDisabled
 
 	// Setup channels for feeding writers and data senders that should do
 	// their work outside the main minimiser loop. They are buffered to
@@ -1027,7 +1056,7 @@ func (dtm *dnstapMinimiser) qnameSeen(msg *dns.Msg, seenQnameLRU *lru.Cache[stri
 // runMinimiser reads frames from the inputChannel, doing any modifications and
 // then passes them on to a dnstap.Output. To gracefully stop
 // runMinimiser() you need to close the dtm.stop channel.
-func (dtm *dnstapMinimiser) runMinimiser(minimiserID int, wg *sync.WaitGroup, dawgFile string, mqttPubCh chan []byte, seenQnameLRU *lru.Cache[string, struct{}], pdb *pebble.DB, newQnameBuffer int, autopahoCtx context.Context, disableSessionFiles bool, debugDnstapFile *os.File, disableHistogramSender bool, labelLimit int, wkdTracker *wellKnownDomainsTracker) {
+func (dtm *dnstapMinimiser) runMinimiser(minimiserID int, wg *sync.WaitGroup, dawgFile string, seenQnameLRU *lru.Cache[string, struct{}], pdb *pebble.DB, newQnameBuffer int, disableSessionFiles bool, debugDnstapFile *os.File, disableHistogramSender bool, labelLimit int, wkdTracker *wellKnownDomainsTracker) {
 	defer wg.Done()
 
 	dt := &dnstap.Dnstap{}
@@ -1101,15 +1130,16 @@ minimiserLoop:
 			}
 
 			if !dtm.qnameSeen(msg, seenQnameLRU, pdb) {
-				newQname := protocols.NewQnameEvent(msg, truncatedTimestamp)
+				if !dtm.mqttDisabled {
+					newQname := protocols.NewQnameEvent(msg, truncatedTimestamp)
 
-				// If the queue is full we skip sending new_qname events on the bus
-				select {
-				case dtm.newQnamePublisherCh <- &newQname:
-					dtm.newQnameQueued.Inc()
-				default:
-					// If the publisher channel is full we skip creating an event.
-					dtm.newQnameDiscarded.Inc()
+					select {
+					case dtm.newQnamePublisherCh <- &newQname:
+						dtm.newQnameQueued.Inc()
+					default:
+						// If the publisher channel is full we skip creating an event.
+						dtm.newQnameDiscarded.Inc()
+					}
 				}
 			}
 
@@ -1378,7 +1408,7 @@ func timestampsFromFilename(name string) (time.Time, time.Time, error) {
 	return startTime, stopTime, nil
 }
 
-func (dtm *dnstapMinimiser) newQnamePublisher(mqttPubCh chan []byte, wg *sync.WaitGroup, autopahoCtx context.Context) {
+func (dtm *dnstapMinimiser) newQnamePublisher(wg *sync.WaitGroup) {
 	wg.Add(1)
 	defer wg.Done()
 
@@ -1390,14 +1420,14 @@ func (dtm *dnstapMinimiser) newQnamePublisher(mqttPubCh chan []byte, wg *sync.Wa
 		}
 
 		select {
-		case mqttPubCh <- newQnameJSON:
-		case <-autopahoCtx.Done():
+		case dtm.mqttPubCh <- newQnameJSON:
+		case <-dtm.autopahoCtx.Done():
 			dtm.log.Info("newQnamePublisher: the MQTT connection is shutting down, stop writing")
 			// No need to break out of for loop here because
-			// inputCh is already closed in runMinimiser()
+			// inputCh is already closed in Run()
 		}
 	}
-	close(mqttPubCh)
+	close(dtm.mqttPubCh)
 	dtm.log.Info("newQnamePublisher: exiting loop")
 }
 

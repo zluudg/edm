@@ -1,13 +1,11 @@
 package runner
 
 import (
-	"context"
 	"crypto/ecdsa"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"net/url"
-	"sync"
 
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
@@ -51,20 +49,20 @@ func (dtm *dnstapMinimiser) newAutoPahoClientConfig(caCertPool *x509.CertPool, s
 
 }
 
-func runAutoPaho(ctx context.Context, wg *sync.WaitGroup, cm *autopaho.ConnectionManager, dtm *dnstapMinimiser, mqttPubCh chan []byte, topic string, mqttSigningKey *ecdsa.PrivateKey) {
-	wg.Add(1)
-	defer wg.Done()
+func (dtm *dnstapMinimiser) runAutoPaho(cm *autopaho.ConnectionManager, topic string, mqttSigningKey *ecdsa.PrivateKey) {
+	dtm.autopahoWg.Add(1)
+	defer dtm.autopahoWg.Done()
 	for {
 		// AwaitConnection will return immediately if connection is up; adding this call stops publication whilst
 		// connection is unavailable.
-		err := cm.AwaitConnection(ctx)
+		err := cm.AwaitConnection(dtm.autopahoCtx)
 		if err != nil { // Should only happen when context is cancelled
 			dtm.log.Error("publisher done", "AwaitConnection", err)
 			return
 		}
 
 		// Wait for a message to publish
-		unsignedMsg := <-mqttPubCh
+		unsignedMsg := <-dtm.mqttPubCh
 		if unsignedMsg == nil {
 			// The channel has been closed
 			dtm.log.Info("runAutoPaho: message queue closed, exiting")
@@ -76,9 +74,9 @@ func runAutoPaho(ctx context.Context, wg *sync.WaitGroup, cm *autopaho.Connectio
 			dtm.log.Error("runAutoPaho: failed to created JWS message", "error", err)
 		}
 
-		// Publish will block so we run it in a goRoutine
+		// Publish will block so we run it in a goroutine
 		go func(msg []byte) {
-			pr, err := cm.Publish(ctx, &paho.Publish{
+			pr, err := cm.Publish(dtm.autopahoCtx, &paho.Publish{
 				QoS:     0,
 				Topic:   topic,
 				Payload: msg,
@@ -95,7 +93,7 @@ func runAutoPaho(ctx context.Context, wg *sync.WaitGroup, cm *autopaho.Connectio
 		}(signedMsg)
 
 		select {
-		case <-ctx.Done():
+		case <-dtm.autopahoCtx.Done():
 			dtm.log.Info("publisher done")
 			return
 		default:
