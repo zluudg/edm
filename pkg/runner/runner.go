@@ -673,13 +673,13 @@ func Run() {
 
 	dawgFile := viper.GetString("well-known-domains")
 
-	dawgFinder, err := dawg.Load(dawgFile)
+	dawgFinder, dawgModTime, err := loadDawgFile(dawgFile)
 	if err != nil {
-		dtm.log.Error("unable to load DAWG file", "error", err.Error())
+		dtm.log.Error("Run: loadDawgFile failed", "error", err)
 		os.Exit(1)
 	}
 
-	wkdTracker, err := newWellKnownDomainsTracker(dawgFinder)
+	wkdTracker, err := newWellKnownDomainsTracker(dawgFinder, dawgModTime)
 	if err != nil {
 		dtm.log.Error(err.Error())
 		os.Exit(1)
@@ -732,6 +732,9 @@ func Run() {
 
 	// Wait here until all instances of runMinimiser() is done
 	minimiserWg.Wait()
+
+	// Tell collector it is time to stop reading data
+	close(wkdTracker.stop)
 
 	// Make sure writers have completed their work
 	close(dtm.newQnamePublisherCh)
@@ -876,29 +879,34 @@ func newDnstapMinimiser(logger *slog.Logger, cryptopanKey string, cryptopanSalt 
 type wellKnownDomainsTracker struct {
 	mutex sync.RWMutex
 	wellKnownDomainsData
+	updateCh    chan wkdUpdate
+	dawgModTime time.Time
+	retryCh     chan wkdUpdate
+	stop        chan struct{}
+	retryerDone chan struct{}
 }
 
 type wellKnownDomainsData struct {
-	// Store a pointer to histogramCounters so we can assign to it without
+	// Store a pointer to histogramData so we can assign to it without
 	// "cannot assign to struct field in map" issues
 	m             map[int]*histogramData
 	rotationTime  time.Time
 	dawgFinder    dawg.Finder
-	murmur3Hasher hash.Hash64
+	dawgIsRotated bool
 }
 
-func newWellKnownDomainsTracker(dawgFinder dawg.Finder) (*wellKnownDomainsTracker, error) {
-
-	// We use a deterministic seed by design to be able to combine HLL
-	// datasets.
-	murmur3Hasher := murmur3.New64()
+func newWellKnownDomainsTracker(dawgFinder dawg.Finder, dawgModTime time.Time) (*wellKnownDomainsTracker, error) {
 
 	return &wellKnownDomainsTracker{
 		wellKnownDomainsData: wellKnownDomainsData{
-			m:             map[int]*histogramData{},
-			dawgFinder:    dawgFinder,
-			murmur3Hasher: murmur3Hasher,
+			m:          map[int]*histogramData{},
+			dawgFinder: dawgFinder,
 		},
+		updateCh:    make(chan wkdUpdate, 10000),
+		retryCh:     make(chan wkdUpdate, 10000),
+		dawgModTime: dawgModTime,
+		stop:        make(chan struct{}),
+		retryerDone: make(chan struct{}),
 	}, nil
 }
 
@@ -923,82 +931,130 @@ func (wkd *wellKnownDomainsTracker) dawgIndex(msg *dns.Msg) (int, bool) {
 	return dawgIndex, false
 }
 
-func (wkd *wellKnownDomainsTracker) isKnown(ipBytes []byte, msg *dns.Msg) bool {
+type wkdUpdate struct {
+	// embed histogramData so we automatically have access to all the
+	// fields we may want to increment with an update message.
+	histogramData
+	dawgIndex   int
+	suffixMatch bool
+	hllHash     uint64
+	ip          netip.Addr
+	msg         *dns.Msg
+	dawgModTime time.Time
+	retry       int
+	retryLimit  int
+}
 
-	wkd.mutex.Lock()
-	defer wkd.mutex.Unlock()
+func (wkd *wellKnownDomainsTracker) lookup(ipBytes []byte, msg *dns.Msg) (int, bool, time.Time) {
+
+	wkd.mutex.RLock()
+	defer wkd.mutex.RUnlock()
 
 	dawgIndex, suffixMatch := wkd.dawgIndex(msg)
 
-	// If this is is not a well-known domain just return as fast as
-	// possible
-	if dawgIndex == dawgNotFound {
-		return false
+	return dawgIndex, suffixMatch, wkd.dawgModTime
+}
+
+func (wkd *wellKnownDomainsTracker) updateRetryer(dtm *dnstapMinimiser, wg *sync.WaitGroup) {
+	wg.Add(1)
+	defer wg.Done()
+
+	for wu := range wkd.retryCh {
+		wu.retry += 1
+		if wu.retry >= wu.retryLimit {
+			dtm.log.Info("ignoring wkd update since retry counter hit retry limit", "retry", wu.retry, "retry_limit", wu.retryLimit)
+			continue
+		}
+
+		dawgIndex, suffixMatch, dawgModTime := wkd.lookup(wu.ip.AsSlice(), wu.msg)
+		if dawgIndex == dawgNotFound {
+			dtm.log.Info("ignoring wkd update because name does not exist in updated wkd tracker", "update_dawg_modtime", wkd.dawgModTime, "wkd_dawg_modtime", wkd.dawgModTime)
+			continue
+		}
+
+		// Refresh the update to match new dawg version
+		wu.dawgIndex = dawgIndex
+		wu.suffixMatch = suffixMatch
+		wu.dawgModTime = dawgModTime
+
+		if dtm.debug {
+			dtm.log.Debug("resending refreshed wkd update", "retry_counter", wu.retry)
+		}
+		wkd.updateCh <- wu
 	}
 
-	if _, exists := wkd.m[dawgIndex]; !exists {
-		// We leave the label0-9 fields set to nil here. Since this is in
-		// the hot path of dealing with dnstap packets the less work we do the
-		// better. They are filled in prior to writing out the parquet file.
-		wkd.m[dawgIndex] = &histogramData{}
+	dtm.log.Info("updateRetryer: exiting loop")
+	close(wkd.retryerDone)
+}
 
-		dsb := new(dtmStatusBits)
-		if suffixMatch {
-			dsb.set(dtmStatusWellKnownWildcard)
-		} else {
-			dsb.set(dtmStatusWellKnownExact)
-		}
-		wkd.m[dawgIndex].DTMStatusBits = int64(*dsb)
+func (wkd *wellKnownDomainsTracker) sendUpdate(murmur3Hasher hash.Hash64, ipBytes []byte, msg *dns.Msg, dawgIndex int, suffixMatch bool, dawgModTime time.Time) {
+
+	wu := wkdUpdate{
+		dawgIndex:   dawgIndex,
+		suffixMatch: suffixMatch,
+		dawgModTime: dawgModTime,
+		hllHash:     0,
+		retryLimit:  10,
+		msg:         msg,
 	}
 
 	// Create hash from IP address for use in HLL data
 	ip, ok := netip.AddrFromSlice(ipBytes)
 	if ok {
-		wkd.murmur3Hasher.Write(ipBytes) // #nosec G104 -- Write() on hash.Hash never returns an error (https://pkg.go.dev/hash#Hash)
-		if ip.Unmap().Is4() {
-			wkd.m[dawgIndex].v4ClientHLL.AddRaw(wkd.murmur3Hasher.Sum64())
-		} else {
-			wkd.m[dawgIndex].v6ClientHLL.AddRaw(wkd.murmur3Hasher.Sum64())
-		}
-		wkd.murmur3Hasher.Reset()
+		murmur3Hasher.Write(ipBytes) // #nosec G104 -- Write() on hash.Hash never returns an error (https://pkg.go.dev/hash#Hash)
+		wu.hllHash = murmur3Hasher.Sum64()
+		murmur3Hasher.Reset()
+		wu.ip = ip
 	}
 
 	// Counters based on header
 	switch msg.Rcode {
 	case dns.RcodeSuccess:
-		wkd.m[dawgIndex].OKCount++
+		wu.OKCount++
 	case dns.RcodeNXRrset:
-		wkd.m[dawgIndex].NXCount++
+		wu.NXCount++
 	case dns.RcodeServerFailure:
-		wkd.m[dawgIndex].FailCount++
+		wu.FailCount++
 	}
 
 	// Counters based on question class and type
 	if msg.Question[0].Qclass == dns.ClassINET {
 		switch msg.Question[0].Qtype {
 		case dns.TypeA:
-			wkd.m[dawgIndex].ACount++
+			wu.ACount++
 		case dns.TypeAAAA:
-			wkd.m[dawgIndex].AAAACount++
+			wu.AAAACount++
 		case dns.TypeMX:
-			wkd.m[dawgIndex].MXCount++
+			wu.MXCount++
 		case dns.TypeNS:
-			wkd.m[dawgIndex].NSCount++
+			wu.NSCount++
 		default:
-			wkd.m[dawgIndex].OtherCount++
+			wu.OtherCount++
 		}
 	} else {
-		wkd.m[dawgIndex].NonINCount++
+		wu.NonINCount++
 	}
 
-	return true
+	wkd.updateCh <- wu
 }
 
-func (wkd *wellKnownDomainsTracker) rotateTracker(dawgFile string, rotationTime time.Time) (*wellKnownDomainsData, error) {
+func (wkd *wellKnownDomainsTracker) rotateTracker(dtm *dnstapMinimiser, dawgFile string, rotationTime time.Time) (*wellKnownDomainsData, error) {
 
-	dawgFinder, err := dawg.Load(dawgFile)
+	dawgFileChanged := false
+	var dawgFinder dawg.Finder
+
+	fileInfo, err := os.Stat(dawgFile)
 	if err != nil {
-		return nil, fmt.Errorf("rotateTracker: dawg.Load(): %w", err)
+		return nil, fmt.Errorf("rotateTracker: unable to stat dawgFile '%s': %w", dawgFile, err)
+	}
+
+	if fileInfo.ModTime() != wkd.dawgModTime {
+		dawgFinder, err = dawg.Load(dawgFile)
+		if err != nil {
+			return nil, fmt.Errorf("rotateTracker: dawg.Load(): %w", err)
+		}
+		dawgFileChanged = true
+		dtm.log.Info("dawg file modificatiom changed, will reload file", "prev_time", wkd.dawgModTime, "cur_time", fileInfo.ModTime())
 	}
 
 	prevWKD := &wellKnownDomainsData{}
@@ -1008,7 +1064,11 @@ func (wkd *wellKnownDomainsTracker) rotateTracker(dawgFile string, rotationTime 
 	prevWKD.m = wkd.m
 	prevWKD.dawgFinder = wkd.dawgFinder
 	wkd.m = map[int]*histogramData{}
-	wkd.dawgFinder = dawgFinder
+	if dawgFileChanged {
+		wkd.dawgFinder = dawgFinder
+		wkd.dawgModTime = fileInfo.ModTime()
+		prevWKD.dawgIsRotated = true
+	}
 	wkd.mutex.Unlock()
 
 	prevWKD.rotationTime = rotationTime
@@ -1068,6 +1128,10 @@ func (dtm *dnstapMinimiser) runMinimiser(minimiserID int, wg *sync.WaitGroup, da
 	defer wg.Done()
 
 	dt := &dnstap.Dnstap{}
+
+	// We use a deterministic seed by design to be able to combine HLL
+	// datasets.
+	murmur3Hasher := murmur3.New64()
 
 minimiserLoop:
 	for {
@@ -1130,7 +1194,9 @@ minimiserLoop:
 
 			// We pass on the client address for cardinality
 			// measurements.
-			if wkdTracker.isKnown(dangerRealClientIP, msg) {
+			dawgIndex, suffixMatch, dawgModTime := wkdTracker.lookup(dangerRealClientIP, msg)
+			if dawgIndex != dawgNotFound {
+				wkdTracker.sendUpdate(murmur3Hasher, dangerRealClientIP, msg, dawgIndex, suffixMatch, dawgModTime)
 				if dtm.debug {
 					dtm.log.Debug("skipping well-known domain", "domain", msg.Question[0].Name, "minimiser_id", minimiserID)
 				}
@@ -1624,6 +1690,18 @@ func getStartTimeFromRotationTime(rotationTime time.Time) time.Time {
 }
 
 func (dtm *dnstapMinimiser) writeHistogramParquet(prevWellKnownDomainsData *wellKnownDomainsData, labelLimit int, outboxDir string) error {
+
+	if prevWellKnownDomainsData.dawgIsRotated {
+		defer func() {
+			err := prevWellKnownDomainsData.dawgFinder.Close()
+			if err != nil {
+				dtm.log.Error("writeHistogramParquet: unable to close dawgFinder", "error", err)
+			} else {
+				dtm.log.Info("closed rotated dawgFinder instance")
+			}
+		}()
+	}
+
 	startTime := getStartTimeFromRotationTime(prevWellKnownDomainsData.rotationTime)
 
 	absoluteTmpFileName, absoluteFileName := buildParquetFilenames(outboxDir, "dns_histogram", startTime, prevWellKnownDomainsData.rotationTime)
@@ -1818,17 +1896,24 @@ func timeUntilNextMinute() time.Duration {
 }
 
 // runMinimiser generates data and it is collected into datasets here
-func (dtm *dnstapMinimiser) dataCollector(wg *sync.WaitGroup, wkdTracker *wellKnownDomainsTracker, dawgFile string) {
+func (dtm *dnstapMinimiser) dataCollector(wg *sync.WaitGroup, wkd *wellKnownDomainsTracker, dawgFile string) {
 	wg.Add(1)
 	defer wg.Done()
 
 	// Keep track of if we have recorded any dnstap packets in session data
 	var session_updated bool
 
+	// Start retryer, handles instances where the received update has a
+	// dawgModTime that is no longer valid becuase it has been rotated.
+	var retryerWg sync.WaitGroup
+	go wkd.updateRetryer(dtm, &retryerWg)
+
 	sessions := []*sessionData{}
 
 	ticker := time.NewTicker(timeUntilNextMinute())
 	defer ticker.Stop()
+
+	retryChannelClosed := false
 
 collectorLoop:
 	for {
@@ -1836,6 +1921,47 @@ collectorLoop:
 		case sd := <-dtm.sessionCollectorCh:
 			sessions = append(sessions, sd)
 			session_updated = true
+
+		case wu := <-wkd.updateCh:
+			// It is possible an update sitting in the queue has
+			// been created with an outdated dawgModTime due to a
+			// call to rotateTracker(). If this is the case we need
+			// to do a new lookup against the new dawg to make sure
+			// we have the correct index number (or if it is even
+			// present in the new dawg).
+			if wu.dawgModTime != wkd.dawgModTime {
+				if !retryChannelClosed {
+					wkd.retryCh <- wu
+				} else {
+					dtm.log.Info("discarding retry of wkd update because we are shutting down")
+				}
+				continue
+			}
+
+			if _, exists := wkd.m[wu.dawgIndex]; !exists {
+				// We leave the label0-9 fields set to nil here. Since this is in
+				// the hot path of dealing with dnstap packets the less work we do the
+				// better. They are filled in prior to writing out the parquet file.
+				wkd.m[wu.dawgIndex] = &histogramData{}
+
+				dsb := new(dtmStatusBits)
+				if wu.suffixMatch {
+					dsb.set(dtmStatusWellKnownWildcard)
+				} else {
+					dsb.set(dtmStatusWellKnownExact)
+				}
+				wkd.m[wu.dawgIndex].DTMStatusBits = int64(*dsb)
+			}
+
+			wkd.m[wu.dawgIndex].OKCount += wu.OKCount
+			wkd.m[wu.dawgIndex].NXCount += wu.NXCount
+			wkd.m[wu.dawgIndex].FailCount += wu.FailCount
+			wkd.m[wu.dawgIndex].ACount += wu.ACount
+			wkd.m[wu.dawgIndex].AAAACount += wu.AAAACount
+			wkd.m[wu.dawgIndex].MXCount += wu.MXCount
+			wkd.m[wu.dawgIndex].NSCount += wu.NSCount
+			wkd.m[wu.dawgIndex].OtherCount += wu.OtherCount
+			wkd.m[wu.dawgIndex].NonINCount += wu.NonINCount
 
 		case ts := <-ticker.C:
 			// We want to tick at the start of each minute
@@ -1855,7 +1981,7 @@ collectorLoop:
 				dtm.sessionWriterCh <- ps
 			}
 
-			prevWKD, err := wkdTracker.rotateTracker(dawgFile, ts)
+			prevWKD, err := wkd.rotateTracker(dtm, dawgFile, ts)
 			if err != nil {
 				dtm.log.Error("unable to rotate histogram map", "error", err)
 				continue
@@ -1865,7 +1991,17 @@ collectorLoop:
 			if len(prevWKD.m) > 0 {
 				dtm.histogramWriterCh <- prevWKD
 			}
-		case <-dtm.stop:
+		case <-wkd.stop:
+			// Tell retryer to stop
+			dtm.log.Info("dataCollector: telling update retryer to stop")
+			close(wkd.retryCh)
+			retryChannelClosed = true
+			// set stop channel to nil so we do not attempt to
+			// read from it again in this select statement now that
+			// it is closed.
+			wkd.stop = nil
+		case <-wkd.retryerDone:
+			dtm.log.Info("dataCollector: update retryer is done")
 			break collectorLoop
 		}
 	}
@@ -1875,4 +2011,18 @@ collectorLoop:
 	close(dtm.histogramWriterCh)
 
 	dtm.log.Info("dataCollector: exiting loop")
+}
+
+func loadDawgFile(dawgFile string) (dawg.Finder, time.Time, error) {
+	dawgFileInfo, err := os.Stat(dawgFile)
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("loadDawgFile: unable to stat dawg file '%s': %w", dawgFile, err)
+	}
+
+	dawgFinder, err := dawg.Load(dawgFile)
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("loadDawgFile: unable to load DAWG file: %w", err)
+	}
+
+	return dawgFinder, dawgFileInfo.ModTime(), nil
 }

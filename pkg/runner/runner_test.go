@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	dnstap "github.com/dnstap/golang-dnstap"
 	"github.com/miekg/dns"
@@ -18,7 +19,7 @@ import (
 
 var testDawg = flag.Bool("test-dawg", false, "perform tests requiring a well-known-domains.dawg file")
 
-func BenchmarkWKDTIsKnown(b *testing.B) {
+func BenchmarkWKDTLookup(b *testing.B) {
 	if !*testDawg {
 		b.Skip("skipping benchmark needing well-known-domains.dawg")
 	}
@@ -40,7 +41,7 @@ func BenchmarkWKDTIsKnown(b *testing.B) {
 		b.Fatalf("unable to set Hll defaults: %s", err)
 	}
 
-	wkdTracker, err := newWellKnownDomainsTracker(dawgFinder)
+	wkdTracker, err := newWellKnownDomainsTracker(dawgFinder, time.Time{})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -54,7 +55,7 @@ func BenchmarkWKDTIsKnown(b *testing.B) {
 
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
-		wkdTracker.isKnown(ip.AsSlice(), m)
+		wkdTracker.lookup(ip.AsSlice(), m)
 	}
 }
 
@@ -120,7 +121,7 @@ func TestWKD(t *testing.T) {
 		},
 	}
 
-	wkd, err := newWellKnownDomainsTracker(dFinder)
+	wkd, err := newWellKnownDomainsTracker(dFinder, time.Time{})
 	if err != nil {
 		t.Fatalf("unable to create well-known domains tracker: %s", err)
 	}
@@ -152,7 +153,7 @@ func TestWKD(t *testing.T) {
 	queryAddr4 := netip.MustParseAddr("198.51.100.20")
 	queryAddr6 := netip.MustParseAddr("2001:db8:1122:3344:5566:7788:99aa:bbcc")
 
-	var wkdIsKnownTests = []struct {
+	var wkdLookupTests = []struct {
 		name    string
 		domain  string
 		known   bool
@@ -184,11 +185,13 @@ func TestWKD(t *testing.T) {
 		},
 	}
 
-	for _, test := range wkdIsKnownTests {
+	for _, test := range wkdLookupTests {
 		m := new(dns.Msg)
 		m.SetQuestion(test.domain, dns.TypeA)
 
-		known := wkd.isKnown(test.address, m)
+		dawgIndex, _, _ := wkd.lookup(test.address, m)
+
+		known := dawgIndex != dawgNotFound
 
 		if test.known != known {
 			t.Fatalf("%s: unexpected known status, have: %t, want: %t", test.name, known, test.known)
