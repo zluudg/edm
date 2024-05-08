@@ -9,7 +9,7 @@ RUN go test -race ./...
 
 RUN CGO_ENABLED=0 go build -o /go/bin/dtm
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM cgr.dev/chainguard/static:latest
 
 COPY --from=build /go/bin/dtm /
 CMD ["/dtm"]
