@@ -2,3 +2,4 @@ coverage.out
 dtm
 pkg/protocols/checkout
 well-known-domains.dawg
+dtm.toml
