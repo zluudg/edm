@@ -4,8 +4,8 @@ WORKDIR /go/src/app
 COPY . .
 
 RUN go mod download
-RUN go vet -v
-RUN go test -v
+RUN go vet ./...
+RUN go test -race ./...
 
 RUN CGO_ENABLED=0 go build -o /go/bin/dtm
 
