@@ -1,0 +1,10 @@
+services:
+  dtm:
+    image: ghcr.io/dnstapir/dtm:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      x-bake:
+        platforms:
+          - linux/amd64
+          - linux/arm64
