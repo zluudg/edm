@@ -25,4 +25,4 @@ jobs:
       - name: Test
         run: go test -race ./...
       - name: Build
-        run: go build
+        run: CGO_ENABLED=0 go build
