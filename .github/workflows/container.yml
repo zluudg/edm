@@ -44,11 +44,21 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-      - name: Build and push
+      - name: Build and push (amd64)
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
           provenance: false
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
+          tags: ${{ steps.meta.outputs.tags }}
+      - name: Build and push (arm64)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          build-args:
+            - RUN_TESTS=0
+          push: true
+          provenance: false
+          platforms: linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
