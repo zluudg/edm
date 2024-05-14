@@ -1,5 +1,6 @@
 ARCH=		$(shell arch)
 TEST_ARCH=
+OUTPUT=		dtm
 
 run_tests=	yes
 ifdef TEST_ARCH
@@ -14,14 +15,10 @@ all:
 container:
 	docker buildx bake
 
-download:
-	go mod download
-
 build:
-	CGO_ENABLED=0 go build -o /go/bin/dtm
-
-test:
+	go mod download
 ifeq "$(run_tests)" "yes"
 	go vet ./...
 	go test -race ./...
 endif
+	CGO_ENABLED=0 go build -o $(OUTPUT)

@@ -5,9 +5,7 @@ ARG TEST_ARCH=
 WORKDIR /go/src/app
 COPY . .
 
-RUN make download
-RUN make TEST_ARCH=$TEST_ARCH test
-RUN make build
+RUN make TEST_ARCH=$TEST_ARCH OUTPUT=/go/bin/dtm build
 
 
 FROM cgr.dev/chainguard/static:latest
