@@ -22,3 +22,6 @@ ifeq "$(run_tests)" "yes"
 	go test -race ./...
 endif
 	CGO_ENABLED=0 go build -o $(OUTPUT)
+
+clean:
+	rm -f $(OUTPUT)
