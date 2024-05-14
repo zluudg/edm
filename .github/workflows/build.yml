@@ -19,10 +19,8 @@ jobs:
       - name: Display Go version
         run: go version
       - name: Install dependencies
-        run: go mod download
-      - name: Vet
-        run: go vet ./...
+        run: make download
       - name: Test
-        run: go test -race ./...
+        run: make test
       - name: Build
-        run: CGO_ENABLED=0 go build
+        run: make build
