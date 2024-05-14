@@ -56,8 +56,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          build-args:
-            - RUN_TESTS=0
+          build-args: RUN_TESTS=0
           push: true
           provenance: false
           platforms: linux/arm64
