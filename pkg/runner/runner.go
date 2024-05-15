@@ -1010,7 +1010,7 @@ func (wkd *wellKnownDomainsTracker) sendUpdate(ipBytes []byte, msg *dns.Msg, daw
 	switch msg.Rcode {
 	case dns.RcodeSuccess:
 		wu.OKCount++
-	case dns.RcodeNXRrset:
+	case dns.RcodeNameError:
 		wu.NXCount++
 	case dns.RcodeServerFailure:
 		wu.FailCount++
