@@ -119,7 +119,8 @@ func (as aggregateSender) send(fileName string, ts time.Time, duration time.Dura
 	startTime := time.Now()
 	res, err := as.signingHttpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("sendAggregateFile: unable to send request: %w", err)
+		elapsedTime := time.Since(startTime)
+		return fmt.Errorf("sendAggregateFile: unable to send request, elapsed time %s: %w", elapsedTime, err)
 	}
 	elapsedTime := time.Since(startTime)
 
