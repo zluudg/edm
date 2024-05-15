@@ -1456,6 +1456,7 @@ timerLoop:
 					err = dtm.aggregSender.send(absPath, startTS, duration)
 					if err != nil {
 						dtm.log.Error("histogramSender: unable to send histogram file", "error", err)
+						continue
 					}
 					err = dtm.renameFile(absPath, absPathSent)
 					if err != nil {
