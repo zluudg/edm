@@ -10,7 +10,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"hash"
 	"io/fs"
 	"log"
 	"log/slog"
@@ -987,7 +986,7 @@ func (wkd *wellKnownDomainsTracker) updateRetryer(dtm *dnstapMinimiser, wg *sync
 	close(wkd.retryerDone)
 }
 
-func (wkd *wellKnownDomainsTracker) sendUpdate(murmur3Hasher hash.Hash64, ipBytes []byte, msg *dns.Msg, dawgIndex int, suffixMatch bool, dawgModTime time.Time) {
+func (wkd *wellKnownDomainsTracker) sendUpdate(ipBytes []byte, msg *dns.Msg, dawgIndex int, suffixMatch bool, dawgModTime time.Time) {
 
 	wu := wkdUpdate{
 		dawgIndex:   dawgIndex,
@@ -1001,9 +1000,9 @@ func (wkd *wellKnownDomainsTracker) sendUpdate(murmur3Hasher hash.Hash64, ipByte
 	// Create hash from IP address for use in HLL data
 	ip, ok := netip.AddrFromSlice(ipBytes)
 	if ok {
-		murmur3Hasher.Write(ipBytes) // #nosec G104 -- Write() on hash.Hash never returns an error (https://pkg.go.dev/hash#Hash)
-		wu.hllHash = murmur3Hasher.Sum64()
-		murmur3Hasher.Reset()
+		// We use a deterministic seed by design to be able to combine HLL
+		// datasets.
+		wu.hllHash = murmur3.Sum64(ipBytes)
 		wu.ip = ip
 	}
 
@@ -1129,10 +1128,6 @@ func (dtm *dnstapMinimiser) runMinimiser(minimiserID int, wg *sync.WaitGroup, da
 
 	dt := &dnstap.Dnstap{}
 
-	// We use a deterministic seed by design to be able to combine HLL
-	// datasets.
-	murmur3Hasher := murmur3.New64()
-
 minimiserLoop:
 	for {
 		select {
@@ -1196,7 +1191,7 @@ minimiserLoop:
 			// measurements.
 			dawgIndex, suffixMatch, dawgModTime := wkdTracker.lookup(dangerRealClientIP, msg)
 			if dawgIndex != dawgNotFound {
-				wkdTracker.sendUpdate(murmur3Hasher, dangerRealClientIP, msg, dawgIndex, suffixMatch, dawgModTime)
+				wkdTracker.sendUpdate(dangerRealClientIP, msg, dawgIndex, suffixMatch, dawgModTime)
 				if dtm.debug {
 					dtm.log.Debug("skipping well-known domain", "domain", msg.Question[0].Name, "minimiser_id", minimiserID)
 				}

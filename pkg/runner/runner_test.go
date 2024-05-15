@@ -15,6 +15,7 @@ import (
 	dnstap "github.com/dnstap/golang-dnstap"
 	"github.com/miekg/dns"
 	"github.com/smhanov/dawg"
+	"github.com/spaolacci/murmur3"
 )
 
 var testDawg = flag.Bool("test-dawg", false, "perform tests requiring a well-known-domains.dawg file")
@@ -830,5 +831,49 @@ func BenchmarkPseudonymiseDnstapWithoutCache6(b *testing.B) {
 			},
 		}
 		dtm.pseudonymiseDnstap(dt6)
+	}
+}
+
+func BenchmarkMurmurHasher(b *testing.B) {
+	b.ReportAllocs()
+
+	ipBytes := netip.MustParseAddr("198.51.100.20").AsSlice()
+
+	murmur3Hasher := murmur3.New64()
+
+	for n := 0; n < b.N; n++ {
+		murmur3Hasher.Write(ipBytes) // #nosec G104 -- Write() on hash.Hash never returns an error (https://pkg.go.dev/hash#Hash)
+		murmur3Hasher.Sum64()
+		murmur3Hasher.Reset()
+	}
+}
+
+func BenchmarkMurmurSum64(b *testing.B) {
+	b.ReportAllocs()
+
+	ipBytes := netip.MustParseAddr("198.51.100.20").AsSlice()
+
+	for n := 0; n < b.N; n++ {
+		murmur3.Sum64(ipBytes)
+	}
+}
+
+func TestCompareMurmurHashing(t *testing.T) {
+
+	murmur3Hasher := murmur3.New64()
+
+	ipAddrs := []string{"198.51.100.20", "198.51.100.21", "198.51.100.22"}
+
+	for _, ipAddr := range ipAddrs {
+		ipBytes := netip.MustParseAddr(ipAddr).AsSlice()
+		murmur3Hasher.Write(ipBytes) // #nosec G104 -- Write() on hash.Hash never returns an error (https://pkg.go.dev/hash#Hash)
+		hasherRes := murmur3Hasher.Sum64()
+		murmur3Hasher.Reset()
+
+		sumRes := murmur3.Sum64(ipBytes)
+
+		if hasherRes != sumRes {
+			t.Fatalf("have: %d, want: %d", hasherRes, sumRes)
+		}
 	}
 }
