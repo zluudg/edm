@@ -118,11 +118,10 @@ func (as aggregateSender) send(fileName string, ts time.Time, duration time.Dura
 	as.dtm.log.Info("aggregateSender.send", "filename", fileName, "url", histogramURL)
 	startTime := time.Now()
 	res, err := as.signingHttpClient.Do(req)
+	elapsedTime := time.Since(startTime)
 	if err != nil {
-		elapsedTime := time.Since(startTime)
 		return fmt.Errorf("sendAggregateFile: unable to send request, elapsed time %s: %w", elapsedTime, err)
 	}
-	elapsedTime := time.Since(startTime)
 
 	bodyData, err := io.ReadAll(res.Body)
 	if err != nil {
