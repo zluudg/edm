@@ -95,26 +95,27 @@ type histogramData struct {
 	StartTime int64 `parquet:"name=start_time, type=INT64, logicaltype=TIMESTAMP, logicaltype.isadjustedtoutc=true, logicaltype.unit=MICROS"`
 	// Store label fields as pointers so we can signal them being unset as
 	// opposed to an empty string
-	Label0        *string `parquet:"name=label0, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label1        *string `parquet:"name=label1, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label2        *string `parquet:"name=label2, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label3        *string `parquet:"name=label3, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label4        *string `parquet:"name=label4, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label5        *string `parquet:"name=label5, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label6        *string `parquet:"name=label6, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label7        *string `parquet:"name=label7, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label8        *string `parquet:"name=label8, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label9        *string `parquet:"name=label9, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	ACount        int64   `parquet:"name=a_count, type=INT64, convertedtype=UINT_64"`
-	AAAACount     int64   `parquet:"name=aaaa_count, type=INT64, convertedtype=UINT_64"`
-	MXCount       int64   `parquet:"name=mx_count, type=INT64, convertedtype=UINT_64"`
-	NSCount       int64   `parquet:"name=ns_count, type=INT64, convertedtype=UINT_64"`
-	OtherCount    int64   `parquet:"name=other_count, type=INT64, convertedtype=UINT_64"`
-	NonINCount    int64   `parquet:"name=non_in_count, type=INT64, convertedtype=UINT_64"`
-	OKCount       int64   `parquet:"name=ok_count, type=INT64, convertedtype=UINT_64"`
-	NXCount       int64   `parquet:"name=nx_count, type=INT64, convertedtype=UINT_64"`
-	FailCount     int64   `parquet:"name=fail_count, type=INT64, convertedtype=UINT_64"`
-	DTMStatusBits int64   `parquet:"name=dtm_status_bits, type=INT64, convertedtype=UINT_64"`
+	Label0          *string `parquet:"name=label0, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label1          *string `parquet:"name=label1, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label2          *string `parquet:"name=label2, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label3          *string `parquet:"name=label3, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label4          *string `parquet:"name=label4, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label5          *string `parquet:"name=label5, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label6          *string `parquet:"name=label6, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label7          *string `parquet:"name=label7, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label8          *string `parquet:"name=label8, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	Label9          *string `parquet:"name=label9, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	ACount          int64   `parquet:"name=a_count, type=INT64, convertedtype=UINT_64"`
+	AAAACount       int64   `parquet:"name=aaaa_count, type=INT64, convertedtype=UINT_64"`
+	MXCount         int64   `parquet:"name=mx_count, type=INT64, convertedtype=UINT_64"`
+	NSCount         int64   `parquet:"name=ns_count, type=INT64, convertedtype=UINT_64"`
+	OtherTypeCount  int64   `parquet:"name=other_type_count, type=INT64, convertedtype=UINT_64"`
+	NonINCount      int64   `parquet:"name=non_in_count, type=INT64, convertedtype=UINT_64"`
+	OKCount         int64   `parquet:"name=ok_count, type=INT64, convertedtype=UINT_64"`
+	NXCount         int64   `parquet:"name=nx_count, type=INT64, convertedtype=UINT_64"`
+	FailCount       int64   `parquet:"name=fail_count, type=INT64, convertedtype=UINT_64"`
+	OtherRcodeCount int64   `parquet:"name=other_rcode_count, type=INT64, convertedtype=UINT_64"`
+	DTMStatusBits   int64   `parquet:"name=dtm_status_bits, type=INT64, convertedtype=UINT_64"`
 	// The hll.Hll structs are not expected to be included in the output
 	// parquet file, and thus do not need to be exported
 	v4ClientHLL           hll.Hll
@@ -1014,6 +1015,8 @@ func (wkd *wellKnownDomainsTracker) sendUpdate(ipBytes []byte, msg *dns.Msg, daw
 		wu.NXCount++
 	case dns.RcodeServerFailure:
 		wu.FailCount++
+	default:
+		wu.OtherRcodeCount++
 	}
 
 	// Counters based on question class and type
@@ -1028,7 +1031,7 @@ func (wkd *wellKnownDomainsTracker) sendUpdate(ipBytes []byte, msg *dns.Msg, daw
 		case dns.TypeNS:
 			wu.NSCount++
 		default:
-			wu.OtherCount++
+			wu.OtherTypeCount++
 		}
 	} else {
 		wu.NonINCount++
@@ -1956,7 +1959,8 @@ collectorLoop:
 			wkd.m[wu.dawgIndex].AAAACount += wu.AAAACount
 			wkd.m[wu.dawgIndex].MXCount += wu.MXCount
 			wkd.m[wu.dawgIndex].NSCount += wu.NSCount
-			wkd.m[wu.dawgIndex].OtherCount += wu.OtherCount
+			wkd.m[wu.dawgIndex].OtherTypeCount += wu.OtherTypeCount
+			wkd.m[wu.dawgIndex].OtherRcodeCount += wu.OtherRcodeCount
 			wkd.m[wu.dawgIndex].NonINCount += wu.NonINCount
 
 		case ts := <-ticker.C:
