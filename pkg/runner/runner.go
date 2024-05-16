@@ -1963,6 +1963,14 @@ collectorLoop:
 			wkd.m[wu.dawgIndex].OtherRcodeCount += wu.OtherRcodeCount
 			wkd.m[wu.dawgIndex].NonINCount += wu.NonINCount
 
+			if wu.ip.IsValid() {
+				if wu.ip.Unmap().Is4() {
+					wkd.m[wu.dawgIndex].v4ClientHLL.AddRaw(wu.hllHash)
+				} else {
+					wkd.m[wu.dawgIndex].v6ClientHLL.AddRaw(wu.hllHash)
+				}
+			}
+
 		case ts := <-ticker.C:
 			// We want to tick at the start of each minute
 			ticker.Reset(timeUntilNextMinute())
