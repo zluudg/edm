@@ -22,7 +22,7 @@ func (dtm *dnstapMinimiser) newAutoPahoClientConfig(caCertPool *x509.CertPool, s
 	}
 
 	cliCfg := autopaho.ClientConfig{
-		BrokerUrls: []*url.URL{u},
+		ServerUrls: []*url.URL{u},
 		TlsCfg: &tls.Config{
 			RootCAs:      caCertPool,
 			Certificates: []tls.Certificate{clientCert},
