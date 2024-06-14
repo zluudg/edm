@@ -1,7 +1,6 @@
 package runner
 
 import (
-	"crypto/ecdsa"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 	"github.com/eclipse/paho.golang/paho"
 	"github.com/eclipse/paho.golang/paho/log"
 	"github.com/lestrrat-go/jwx/v2/jwa"
+	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/lestrrat-go/jwx/v2/jws"
 )
 
@@ -49,7 +49,7 @@ func (dtm *dnstapMinimiser) newAutoPahoClientConfig(caCertPool *x509.CertPool, s
 
 }
 
-func (dtm *dnstapMinimiser) runAutoPaho(cm *autopaho.ConnectionManager, topic string, mqttSigningKey *ecdsa.PrivateKey) {
+func (dtm *dnstapMinimiser) runAutoPaho(cm *autopaho.ConnectionManager, topic string, mqttJWK jwk.Key) {
 	dtm.autopahoWg.Add(1)
 	defer dtm.autopahoWg.Done()
 	for {
@@ -69,7 +69,7 @@ func (dtm *dnstapMinimiser) runAutoPaho(cm *autopaho.ConnectionManager, topic st
 			return
 		}
 
-		signedMsg, err := jws.Sign(unsignedMsg, jws.WithJSON(), jws.WithKey(jwa.ES256, mqttSigningKey))
+		signedMsg, err := jws.Sign(unsignedMsg, jws.WithJSON(), jws.WithKey(jwa.ES256, mqttJWK))
 		if err != nil {
 			dtm.log.Error("runAutoPaho: failed to created JWS message", "error", err)
 		}

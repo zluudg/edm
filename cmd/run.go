@@ -53,6 +53,7 @@ func init() {
 	runCmd.Flags().Int("minimiser-workers", 1, "how many minimiser workers to start (0 means same as GOMAXPROCS)")
 	runCmd.Flags().Bool("disable-mqtt", false, "disable MQTT message sending")
 	runCmd.Flags().String("mqtt-signing-key-file", "dtm-mqtt-signer-key.pem", "ECSDSA key used for signing MQTT messages")
+	runCmd.Flags().String("mqtt-signing-key-id", "key1", "ID (used as `kid` in JWS) when signing MQTT messages")
 	runCmd.Flags().String("mqtt-client-key-file", "dtm-mqtt-client-key.pem", "ECSDSA client key used for authenticating to MQTT bus")
 	runCmd.Flags().String("mqtt-client-cert-file", "dtm-mqtt-client.pem", "ECSDSA client cert used for authenticating to MQTT bus")
 	runCmd.Flags().String("mqtt-server", "127.0.0.1:8883", "MQTT server we will publish events to")

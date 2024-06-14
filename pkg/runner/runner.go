@@ -36,6 +36,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 	_ "github.com/grafana/pyroscope-go/godeltaprof/http/pprof"
 	lru "github.com/hashicorp/golang-lru/v2"
+	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/miekg/dns"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -500,8 +501,20 @@ func (dtm *dnstapMinimiser) setupMQTT() {
 	// Setup channel for reading messages to publish
 	dtm.mqttPubCh = make(chan []byte, 100)
 
+	mqttJWK, err := jwk.FromRaw(mqttSigningKey)
+	if err != nil {
+		dtm.log.Error("unable to create MQTT JWK key", "error", err)
+		os.Exit(1)
+	}
+
+	err = mqttJWK.Set(jwk.KeyIDKey, viper.GetString("mqtt-signing-key-id"))
+	if err != nil {
+		dtm.log.Error("unable to set MQTT JWK `kid`", "error", err)
+		os.Exit(1)
+	}
+
 	// Connect to the broker - this will return immediately after initiating the connection process
-	go dtm.runAutoPaho(autopahoCm, viper.GetString("mqtt-topic"), mqttSigningKey)
+	go dtm.runAutoPaho(autopahoCm, viper.GetString("mqtt-topic"), mqttJWK)
 }
 
 func Run() {
