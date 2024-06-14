@@ -47,8 +47,8 @@ func (dtm *dnstapMinimiser) newAggregateSender(aggrecURL *url.URL, signingKeyNam
 	}
 
 	// Create signer and wrapped HTTP client
-	signer, _ := httpsign.NewP256Signer(signingKeyName, *signingKey,
-		httpsign.NewSignConfig(),
+	signer, _ := httpsign.NewP256Signer(*signingKey,
+		httpsign.NewSignConfig().SetKeyID(signingKeyName),
 		httpsign.Headers("content-type", "content-length", "content-digest")) // The Content-Digest header will be auto-generated, headers selected by https://github.com/dnstapir/aggregate-receiver/blob/main/aggrec/openapi.yaml
 	client := httpsign.NewClient(httpClient, httpsign.NewClientConfig().SetSignatureName("sig1").SetSigner(signer)) // sign requests, don't verify responses
 
