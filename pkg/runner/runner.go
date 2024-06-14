@@ -513,6 +513,15 @@ func Run() {
 	// well
 	slog.SetDefault(logger)
 
+	if viper.GetBool("debug-enable-blockprofiling") {
+		logger.Info("enabling blocking profiling")
+		runtime.SetBlockProfileRate(int(time.Millisecond))
+	}
+	if viper.GetBool("debug-enable-mutexprofiling") {
+		logger.Info("enabling mutex profiling")
+		runtime.SetMutexProfileFraction(100)
+	}
+
 	if viper.GetString("cryptopan-key") == "" {
 		logger.Error("cryptopan setup error", "error", "missing required setting 'cryptopan-key' in config", "configfile", viper.ConfigFileUsed())
 		os.Exit(1)

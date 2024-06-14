@@ -74,6 +74,9 @@ func init() {
 
 	runCmd.Flags().String("debug-dnstap-filename", "", "File for dumping JSON-formatted dnstap packets we are about to process, for debugging")
 
+	runCmd.Flags().Bool("debug-enable-blockprofiling", false, "Enable profiling of goroutine blocking events")
+	runCmd.Flags().Bool("debug-enable-mutexprofiling", false, "Enable profiling of mutex contention events")
+
 	err := viper.BindPFlags(runCmd.Flags())
 	if err != nil {
 		log.Fatal(err)
