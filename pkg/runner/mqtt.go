@@ -14,7 +14,7 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jws"
 )
 
-func (dtm *dnstapMinimiser) newAutoPahoClientConfig(caCertPool *x509.CertPool, server string, clientID string, clientCert tls.Certificate, mqttKeepAlive uint16) (autopaho.ClientConfig, error) {
+func (edm *dnstapMinimiser) newAutoPahoClientConfig(caCertPool *x509.CertPool, server string, clientID string, clientCert tls.Certificate, mqttKeepAlive uint16) (autopaho.ClientConfig, error) {
 
 	u, err := url.Parse(server)
 	if err != nil {
@@ -29,17 +29,17 @@ func (dtm *dnstapMinimiser) newAutoPahoClientConfig(caCertPool *x509.CertPool, s
 			MinVersion:   tls.VersionTLS13,
 		},
 		KeepAlive:      mqttKeepAlive,
-		OnConnectionUp: func(*autopaho.ConnectionManager, *paho.Connack) { dtm.log.Info("mqtt connection up") },
-		OnConnectError: func(err error) { dtm.log.Error("error whilst attempting connection", "error", err) },
+		OnConnectionUp: func(*autopaho.ConnectionManager, *paho.Connack) { edm.log.Info("mqtt connection up") },
+		OnConnectError: func(err error) { edm.log.Error("error whilst attempting connection", "error", err) },
 		Debug:          log.NOOPLogger{},
 		ClientConfig: paho.ClientConfig{
 			ClientID:      clientID,
-			OnClientError: func(err error) { dtm.log.Error("server requested disconnect", "error", err) },
+			OnClientError: func(err error) { edm.log.Error("server requested disconnect", "error", err) },
 			OnServerDisconnect: func(d *paho.Disconnect) {
 				if d.Properties != nil {
-					dtm.log.Error("server requested disconnect", "reason_string", d.Properties.ReasonString)
+					edm.log.Error("server requested disconnect", "reason_string", d.Properties.ReasonString)
 				} else {
-					dtm.log.Error("server requested disconnect", "reason_code", d.ReasonCode)
+					edm.log.Error("server requested disconnect", "reason_code", d.ReasonCode)
 				}
 			},
 		},
@@ -49,52 +49,52 @@ func (dtm *dnstapMinimiser) newAutoPahoClientConfig(caCertPool *x509.CertPool, s
 
 }
 
-func (dtm *dnstapMinimiser) runAutoPaho(cm *autopaho.ConnectionManager, topic string, mqttJWK jwk.Key) {
-	dtm.autopahoWg.Add(1)
-	defer dtm.autopahoWg.Done()
+func (edm *dnstapMinimiser) runAutoPaho(cm *autopaho.ConnectionManager, topic string, mqttJWK jwk.Key) {
+	edm.autopahoWg.Add(1)
+	defer edm.autopahoWg.Done()
 	for {
 		// AwaitConnection will return immediately if connection is up; adding this call stops publication whilst
 		// connection is unavailable.
-		err := cm.AwaitConnection(dtm.autopahoCtx)
+		err := cm.AwaitConnection(edm.autopahoCtx)
 		if err != nil { // Should only happen when context is cancelled
-			dtm.log.Error("publisher done", "AwaitConnection", err)
+			edm.log.Error("publisher done", "AwaitConnection", err)
 			return
 		}
 
 		// Wait for a message to publish
-		unsignedMsg := <-dtm.mqttPubCh
+		unsignedMsg := <-edm.mqttPubCh
 		if unsignedMsg == nil {
 			// The channel has been closed
-			dtm.log.Info("runAutoPaho: message queue closed, exiting")
+			edm.log.Info("runAutoPaho: message queue closed, exiting")
 			return
 		}
 
 		signedMsg, err := jws.Sign(unsignedMsg, jws.WithJSON(), jws.WithKey(jwa.ES256, mqttJWK))
 		if err != nil {
-			dtm.log.Error("runAutoPaho: failed to created JWS message", "error", err)
+			edm.log.Error("runAutoPaho: failed to created JWS message", "error", err)
 		}
 
 		// Publish will block so we run it in a goroutine
 		go func(msg []byte) {
-			pr, err := cm.Publish(dtm.autopahoCtx, &paho.Publish{
+			pr, err := cm.Publish(edm.autopahoCtx, &paho.Publish{
 				QoS:     0,
 				Topic:   topic,
 				Payload: msg,
 			})
 			if err != nil {
-				dtm.log.Error("error publishing", "error", err)
+				edm.log.Error("error publishing", "error", err)
 			} else if pr != nil && pr.ReasonCode != 0 && pr.ReasonCode != 16 { // 16 = Server received message but there are no subscribers
 				// pr is only non-nil for QoS 1 and up
-				dtm.log.Info("reason code received", "reason_code", pr.ReasonCode)
+				edm.log.Info("reason code received", "reason_code", pr.ReasonCode)
 			}
-			if dtm.debug {
-				dtm.log.Info("sent message", "content", string(msg))
+			if edm.debug {
+				edm.log.Info("sent message", "content", string(msg))
 			}
 		}(signedMsg)
 
 		select {
-		case <-dtm.autopahoCtx.Done():
-			dtm.log.Info("publisher done")
+		case <-edm.autopahoCtx.Done():
+			edm.log.Info("publisher done")
 			return
 		default:
 		}

@@ -3,7 +3,7 @@ package cmd
 import (
 	"log"
 
-	"github.com/dnstapir/dtm/pkg/runner"
+	"github.com/dnstapir/edm/pkg/runner"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -11,7 +11,7 @@ import (
 // runCmd represents the run command
 var runCmd = &cobra.Command{
 	Use:   "run",
-	Short: "Run dtm in dnstap capture mode",
+	Short: "Run edm in dnstap capture mode",
 	Run: func(cmd *cobra.Command, args []string) {
 		runner.Run()
 	},
@@ -47,18 +47,18 @@ func init() {
 
 	runCmd.Flags().String("cryptopan-key", "", "override the secret used for Crypto-PAn pseudonymization")
 
-	runCmd.Flags().String("cryptopan-key-salt", "dtm-kdf-salt-val", "the salt used for key derivation")
+	runCmd.Flags().String("cryptopan-key-salt", "edm-kdf-salt-val", "the salt used for key derivation")
 	runCmd.Flags().String("well-known-domains", "well-known-domains.dawg", "the dawg file used for filtering well-known domains")
-	runCmd.Flags().String("data-dir", "/var/lib/dtm", "directory where output data is written")
+	runCmd.Flags().String("data-dir", "/var/lib/edm", "directory where output data is written")
 	runCmd.Flags().Int("minimiser-workers", 1, "how many minimiser workers to start (0 means same as GOMAXPROCS)")
 	runCmd.Flags().Bool("disable-mqtt", false, "disable MQTT message sending")
-	runCmd.Flags().String("mqtt-signing-key-file", "dtm-mqtt-signer-key.pem", "ECSDSA key used for signing MQTT messages")
+	runCmd.Flags().String("mqtt-signing-key-file", "edm-mqtt-signer-key.pem", "ECSDSA key used for signing MQTT messages")
 	runCmd.Flags().String("mqtt-signing-key-id", "key1", "ID (used as `kid` in JWS) when signing MQTT messages")
-	runCmd.Flags().String("mqtt-client-key-file", "dtm-mqtt-client-key.pem", "ECSDSA client key used for authenticating to MQTT bus")
-	runCmd.Flags().String("mqtt-client-cert-file", "dtm-mqtt-client.pem", "ECSDSA client cert used for authenticating to MQTT bus")
+	runCmd.Flags().String("mqtt-client-key-file", "edm-mqtt-client-key.pem", "ECSDSA client key used for authenticating to MQTT bus")
+	runCmd.Flags().String("mqtt-client-cert-file", "edm-mqtt-client.pem", "ECSDSA client cert used for authenticating to MQTT bus")
 	runCmd.Flags().String("mqtt-server", "127.0.0.1:8883", "MQTT server we will publish events to")
-	runCmd.Flags().String("mqtt-topic", "events/up/dtm/new_qname", "MQTT server we will publish events to")
-	runCmd.Flags().String("mqtt-client-id", "dtm-pub", "MQTT client id used for publishing events")
+	runCmd.Flags().String("mqtt-topic", "events/up/edm/new_qname", "MQTT server we will publish events to")
+	runCmd.Flags().String("mqtt-client-id", "edm-pub", "MQTT client id used for publishing events")
 	runCmd.Flags().String("mqtt-ca-file", "", "CA cert used for validating MQTT TLS connection, defaults to using OS CA certs")
 
 	runCmd.Flags().Int("mqtt-keepalive", 30, "Keepalive interval for MQTT connection")
@@ -67,10 +67,10 @@ func init() {
 	runCmd.Flags().Int("cryptopan-address-entries", 10000000, "Number of cryptopan pseudonymised addresses stored in LRU cache, 0 disables the cache, need to be changed based on RAM")
 	runCmd.Flags().Int("newqname-buffer", 1000, "Number of slots in new_qname publisher channel, if this is filled up we skip new_qname events")
 	runCmd.Flags().String("http-ca-file", "", "CA cert used for validating aggregate-receiver connection, defaults to using OS CA certs")
-	runCmd.Flags().String("http-signing-key-file", "dtm-http-signer-key.pem", "ECSDSA key used for signing HTTP messages to aggregate-receiver")
+	runCmd.Flags().String("http-signing-key-file", "edm-http-signer-key.pem", "ECSDSA key used for signing HTTP messages to aggregate-receiver")
 	runCmd.Flags().String("http-signing-key-id", "key1", "ID for the HTTP signing key")
-	runCmd.Flags().String("http-client-key-file", "dtm-http-client-key.pem", "ECSDSA client key used for authenticating to aggregate-receiver")
-	runCmd.Flags().String("http-client-cert-file", "dtm-http-client.pem", "ECSDSA client cert used for authenticating to aggregate-receiver")
+	runCmd.Flags().String("http-client-key-file", "edm-http-client-key.pem", "ECSDSA client key used for authenticating to aggregate-receiver")
+	runCmd.Flags().String("http-client-cert-file", "edm-http-client.pem", "ECSDSA client cert used for authenticating to aggregate-receiver")
 	runCmd.Flags().String("http-url", "https://127.0.0.1:8443", "Service we will POST aggregates to")
 
 	runCmd.Flags().String("debug-dnstap-filename", "", "File for dumping JSON-formatted dnstap packets we are about to process, for debugging")

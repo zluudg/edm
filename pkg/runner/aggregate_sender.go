@@ -20,7 +20,7 @@ import (
 )
 
 type aggregateSender struct {
-	dtm               *dnstapMinimiser
+	edm               *dnstapMinimiser
 	aggrecURL         *url.URL
 	signingKey        *ecdsa.PrivateKey
 	caCertPool        *x509.CertPool
@@ -28,7 +28,7 @@ type aggregateSender struct {
 	signingHttpClient *httpsign.Client
 }
 
-func (dtm *dnstapMinimiser) newAggregateSender(aggrecURL *url.URL, signingKeyName string, signingKey *ecdsa.PrivateKey, caCertPool *x509.CertPool, clientCert tls.Certificate) aggregateSender {
+func (edm *dnstapMinimiser) newAggregateSender(aggrecURL *url.URL, signingKeyName string, signingKey *ecdsa.PrivateKey, caCertPool *x509.CertPool, clientCert tls.Certificate) aggregateSender {
 	// Create HTTP handler for sending aggregate files to aggrec
 	httpClient := http.Client{
 		Transport: &http.Transport{
@@ -53,7 +53,7 @@ func (dtm *dnstapMinimiser) newAggregateSender(aggrecURL *url.URL, signingKeyNam
 	client := httpsign.NewClient(httpClient, httpsign.NewClientConfig().SetSignatureName("sig1").SetSigner(signer)) // sign requests, don't verify responses
 
 	return aggregateSender{
-		dtm:               dtm,
+		edm:               edm,
 		aggrecURL:         aggrecURL,
 		signingKey:        signingKey,
 		caCertPool:        caCertPool,
@@ -115,7 +115,7 @@ func (as aggregateSender) send(fileName string, ts time.Time, duration time.Dura
 	minutes := int(math.Round(minutesFloat))
 	req.Header.Add("Aggregate-Interval", fmt.Sprintf("%s/PT%dM", ts.Truncate(time.Minute).Format(time.RFC3339), minutes))
 
-	as.dtm.log.Info("aggregateSender.send", "filename", fileName, "url", histogramURL)
+	as.edm.log.Info("aggregateSender.send", "filename", fileName, "url", histogramURL)
 	startTime := time.Now()
 	res, err := as.signingHttpClient.Do(req)
 	elapsedTime := time.Since(startTime)
@@ -134,7 +134,7 @@ func (as aggregateSender) send(fileName string, ts time.Time, duration time.Dura
 	}
 
 	if res.StatusCode != http.StatusCreated {
-		as.dtm.log.Error(string(bodyData))
+		as.edm.log.Error(string(bodyData))
 		return fmt.Errorf("sendAggregateFile: unexpected status code: %d", res.StatusCode)
 	}
 
@@ -151,7 +151,7 @@ func (as aggregateSender) send(fileName string, ts time.Time, duration time.Dura
 		locationURL.Host = as.aggrecURL.Host
 	}
 
-	as.dtm.log.Info("aggregateSender.send: file uploaded", "elapsed", elapsedTime.String(), "url", locationURL.String())
+	as.edm.log.Info("aggregateSender.send: file uploaded", "elapsed", elapsedTime.String(), "url", locationURL.String())
 
 	return nil
 }

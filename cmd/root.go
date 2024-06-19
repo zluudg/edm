@@ -12,9 +12,9 @@ var cfgFile string
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "dtm",
+	Use:   "edm",
 	Short: "dnstap(ir) minimiser",
-	Long: `dtm is a tool for reading dnstap data, pseudonymizing IP addresses and
+	Long: `edm is a tool for reading dnstap data, pseudonymizing IP addresses and
 outputting minimised output data.`,
 	// Uncomment the following line if your bare application
 	// has an action associated with it:
@@ -37,7 +37,7 @@ func init() {
 	// Cobra supports persistent flags, which, if defined here,
 	// will be global for your application.
 
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file for sensitive information (default is $HOME/.dtm.yaml)")
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file for sensitive information (default is $HOME/.edm.yaml)")
 
 	// Cobra also supports local flags, which will only run
 	// when this action is called directly.
@@ -54,10 +54,10 @@ func initConfig() {
 		home, err := os.UserHomeDir()
 		cobra.CheckErr(err)
 
-		// Search config in home directory with name ".dtm" (without extension).
+		// Search config in home directory with name ".edm" (without extension).
 		viper.AddConfigPath(home)
 		viper.SetConfigType("yaml")
-		viper.SetConfigName(".dtm")
+		viper.SetConfigName(".edm")
 	}
 
 	viper.AutomaticEnv() // read in environment variables that match

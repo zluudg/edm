@@ -1,6 +1,6 @@
 ARCH=		$(shell arch)
 TEST_ARCH=
-OUTPUT=		dtm
+OUTPUT=		edm
 
 run_tests=	yes
 ifdef TEST_ARCH

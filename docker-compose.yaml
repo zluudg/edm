@@ -1,6 +1,6 @@
 services:
-  dtm:
-    image: ghcr.io/dnstapir/dtm:latest
+  edm:
+    image: ghcr.io/dnstapir/edm:latest
     build:
       context: .
       dockerfile: Dockerfile

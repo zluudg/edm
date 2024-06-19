@@ -63,11 +63,11 @@ func BenchmarkWKDTLookup(b *testing.B) {
 func BenchmarkSetHistogramLabels(b *testing.B) {
 	b.ReportAllocs()
 	labels := []string{"label0", "label1", "label2", "label3", "label4", "label5", "label6", "label7", "label8", "label9"}
-	dtm := &dnstapMinimiser{}
+	edm := &dnstapMinimiser{}
 	hd := &histogramData{}
 
 	for i := 0; i < b.N; i++ {
-		dtm.setHistogramLabels(labels, 10, hd)
+		edm.setHistogramLabels(labels, 10, hd)
 	}
 }
 
@@ -211,10 +211,10 @@ func TestSetHistogramLabels(t *testing.T) {
 	compLabels := slices.Clone(labels)
 	slices.Reverse(compLabels)
 
-	dtm := &dnstapMinimiser{}
+	edm := &dnstapMinimiser{}
 	hd := &histogramData{}
 
-	dtm.setHistogramLabels(labels, 10, hd)
+	edm.setHistogramLabels(labels, 10, hd)
 
 	if *hd.Label0 != compLabels[0] {
 		t.Fatalf("have: %s, want: %s", *hd.Label0, compLabels[0])
@@ -258,7 +258,7 @@ func TestSetHistogramLabelsOverLimit(t *testing.T) {
 	compLabels := slices.Clone(labels)
 	slices.Reverse(compLabels)
 
-	dtm := &dnstapMinimiser{}
+	edm := &dnstapMinimiser{}
 	hd := &histogramData{}
 
 	// The label9 field contains all overflowing labels
@@ -266,7 +266,7 @@ func TestSetHistogramLabelsOverLimit(t *testing.T) {
 	slices.Reverse(overflowLabels)
 	combinedLastLabel := strings.Join(overflowLabels, ".")
 
-	dtm.setHistogramLabels(labels, 10, hd)
+	edm.setHistogramLabels(labels, 10, hd)
 
 	if *hd.Label0 != compLabels[0] {
 		t.Fatalf("have: %s, want: %s", *hd.Label0, compLabels[0])
@@ -304,10 +304,10 @@ func TestSetSessionLabels(t *testing.T) {
 	// The reason the labels are "backwards" is because we define "label0"
 	// in the struct as the rightmost DNS label, e.g. "com", "net" etc.
 	labels := []string{"label9", "label8", "label7", "label6", "label5", "label4", "label3", "label2", "label1", "label0"}
-	dtm := &dnstapMinimiser{}
+	edm := &dnstapMinimiser{}
 	sd := &sessionData{}
 
-	dtm.setSessionLabels(labels, 10, sd)
+	edm.setSessionLabels(labels, 10, sd)
 
 	if *sd.Label0 != labels[9] {
 		t.Fatalf("have: %s, want: %s", *sd.Label0, labels[9])
@@ -345,9 +345,9 @@ func TestDTMStatusBitsMulti(t *testing.T) {
 
 	expectedString := "well-known-exact|well-known-wildcard"
 
-	dsb := new(dtmStatusBits)
-	dsb.set(dtmStatusWellKnownWildcard)
-	dsb.set(dtmStatusWellKnownExact)
+	dsb := new(edmStatusBits)
+	dsb.set(edmStatusWellKnownWildcard)
+	dsb.set(edmStatusWellKnownExact)
 
 	if dsb.String() != expectedString {
 		t.Fatalf("have: %s, want: %s", dsb.String(), expectedString)
@@ -358,8 +358,8 @@ func TestDTMStatusBitsSingle(t *testing.T) {
 
 	expectedString := "well-known-exact"
 
-	dsb := new(dtmStatusBits)
-	dsb.set(dtmStatusWellKnownExact)
+	dsb := new(edmStatusBits)
+	dsb.set(edmStatusWellKnownExact)
 
 	if dsb.String() != expectedString {
 		t.Fatalf("have: %s, want: %s", dsb.String(), expectedString)
@@ -370,8 +370,8 @@ func TestDTMStatusBitsMax(t *testing.T) {
 
 	expectedString := "unknown flags in status"
 
-	dsb := new(dtmStatusBits)
-	dsb.set(dtmStatusMax)
+	dsb := new(edmStatusBits)
+	dsb.set(edmStatusMax)
 
 	if !strings.HasPrefix(dsb.String(), "unknown flags in status: ") {
 		t.Fatalf("have: %s, want prefix: %s", dsb.String(), expectedString)
@@ -382,8 +382,8 @@ func TestDTMStatusBitsUnknown(t *testing.T) {
 
 	expectedString := "unknown flags in status"
 
-	dsb := new(dtmStatusBits)
-	dsb.set(dtmStatusMax << 1)
+	dsb := new(edmStatusBits)
+	dsb.set(edmStatusMax << 1)
 
 	if !strings.HasPrefix(dsb.String(), "unknown flags in status: ") {
 		t.Fatalf("have: %s, want prefix: %s", dsb.String(), expectedString)
@@ -487,19 +487,19 @@ func TestPseudonymiseDnstap(t *testing.T) {
 
 	cryptopanCacheSize := 10
 
-	dtm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false, false)
+	edm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false, false)
 	if err != nil {
-		t.Fatalf("unable to setup dtm: %s", err)
+		t.Fatalf("unable to setup edm: %s", err)
 	}
 
-	if dtm.cryptopanCache != nil {
-		if dtm.cryptopanCache.Len() != 0 {
-			t.Fatalf("there should be no entries in newly initialised cryptopan cache but it contains items: %d", dtm.cryptopanCache.Len())
+	if edm.cryptopanCache != nil {
+		if edm.cryptopanCache.Len() != 0 {
+			t.Fatalf("there should be no entries in newly initialised cryptopan cache but it contains items: %d", edm.cryptopanCache.Len())
 		}
 	}
 
-	dtm.pseudonymiseDnstap(dt4)
-	dtm.pseudonymiseDnstap(dt6)
+	edm.pseudonymiseDnstap(dt4)
+	edm.pseudonymiseDnstap(dt6)
 
 	pseudoQueryAddr4, ok := netip.AddrFromSlice(dt4.Message.QueryAddress)
 	if !ok {
@@ -555,13 +555,13 @@ func TestPseudonymiseDnstap(t *testing.T) {
 		t.Fatalf("pseudonymised IPv6 resp address %s is not the expected address %s", pseudoRespAddr6, expectedPseudoRespAddr6)
 	}
 
-	if dtm.cryptopanCache != nil {
-		if dtm.cryptopanCache.Len() == 0 {
+	if edm.cryptopanCache != nil {
+		if edm.cryptopanCache.Len() == 0 {
 			t.Fatalf("there should be entries in the cryptopan cache but it is empty")
 		}
 
 		// Verify the entry in the cache is the same as the one we got back
-		cachedPseudoQueryAddr4, ok := dtm.cryptopanCache.Get(origQueryAddr4)
+		cachedPseudoQueryAddr4, ok := edm.cryptopanCache.Get(origQueryAddr4)
 		if !ok {
 			t.Fatalf("unable to lookup IPv4 query address %s in cache", origQueryAddr4)
 		}
@@ -569,7 +569,7 @@ func TestPseudonymiseDnstap(t *testing.T) {
 			t.Fatalf("cached pseudonymised IPv4 query address %s is not the same as the calculated address %s", cachedPseudoQueryAddr4, pseudoQueryAddr4)
 		}
 
-		cachedPseudoRespAddr4, ok := dtm.cryptopanCache.Get(origRespAddr4)
+		cachedPseudoRespAddr4, ok := edm.cryptopanCache.Get(origRespAddr4)
 		if !ok {
 			t.Fatalf("unable to lookup IPv4 response address %s in cache", origRespAddr4)
 		}
@@ -577,7 +577,7 @@ func TestPseudonymiseDnstap(t *testing.T) {
 			t.Fatalf("cached pseudonymised IPv4 response address %s is not the same as the calculated address %s", cachedPseudoRespAddr4, pseudoRespAddr4)
 		}
 
-		cachedPseudoQueryAddr6, ok := dtm.cryptopanCache.Get(origQueryAddr6)
+		cachedPseudoQueryAddr6, ok := edm.cryptopanCache.Get(origQueryAddr6)
 		if !ok {
 			t.Fatalf("unable to lookup IPv6 query address %s in cache", origQueryAddr6)
 		}
@@ -585,7 +585,7 @@ func TestPseudonymiseDnstap(t *testing.T) {
 			t.Fatalf("cached pseudonymised IPv6 query address %s is not the same as the calculated address %s", cachedPseudoQueryAddr6, pseudoQueryAddr6)
 		}
 
-		cachedPseudoRespAddr6, ok := dtm.cryptopanCache.Get(origRespAddr6)
+		cachedPseudoRespAddr6, ok := edm.cryptopanCache.Get(origRespAddr6)
 		if !ok {
 			t.Fatalf("unable to lookup IPv6 response address %s in cache", origRespAddr6)
 		}
@@ -594,13 +594,13 @@ func TestPseudonymiseDnstap(t *testing.T) {
 		}
 	}
 
-	if dtm.cryptopanCache != nil {
-		t.Logf("number of pseudonymisation cache entries before reset: %d", dtm.cryptopanCache.Len())
+	if edm.cryptopanCache != nil {
+		t.Logf("number of pseudonymisation cache entries before reset: %d", edm.cryptopanCache.Len())
 	}
 
-	if dtm.cryptopanCache != nil {
-		for _, key := range dtm.cryptopanCache.Keys() {
-			value, ok := dtm.cryptopanCache.Get(key)
+	if edm.cryptopanCache != nil {
+		for _, key := range edm.cryptopanCache.Keys() {
+			value, ok := edm.cryptopanCache.Get(key)
 			if !ok {
 				t.Fatalf("unable to extract value for key before reset: %s", key)
 			}
@@ -610,14 +610,14 @@ func TestPseudonymiseDnstap(t *testing.T) {
 	}
 
 	// Replace the cryptopan instance and verify we now get different pseudonymised results
-	err = dtm.setCryptopan("key2", cryptopanSalt, cryptopanCacheSize)
+	err = edm.setCryptopan("key2", cryptopanSalt, cryptopanCacheSize)
 	if err != nil {
-		t.Fatalf("unable to call dtm.SetCryptopan: %s", err)
+		t.Fatalf("unable to call edm.SetCryptopan: %s", err)
 	}
 
-	if dtm.cryptopanCache != nil {
-		if dtm.cryptopanCache.Len() != 0 {
-			t.Fatalf("there should be no cache entries in replaced cryptopan cache but it contains items: %d", dtm.cryptopanCache.Len())
+	if edm.cryptopanCache != nil {
+		if edm.cryptopanCache.Len() != 0 {
+			t.Fatalf("there should be no cache entries in replaced cryptopan cache but it contains items: %d", edm.cryptopanCache.Len())
 		}
 	}
 
@@ -627,8 +627,8 @@ func TestPseudonymiseDnstap(t *testing.T) {
 	dt6.Message.QueryAddress = origQueryAddr6.AsSlice()
 	dt6.Message.ResponseAddress = origRespAddr6.AsSlice()
 
-	dtm.pseudonymiseDnstap(dt4)
-	dtm.pseudonymiseDnstap(dt6)
+	edm.pseudonymiseDnstap(dt4)
+	edm.pseudonymiseDnstap(dt6)
 
 	pseudoQueryAddrUpdated4, ok := netip.AddrFromSlice(dt4.Message.QueryAddress)
 	if !ok {
@@ -689,10 +689,10 @@ func TestPseudonymiseDnstap(t *testing.T) {
 		t.Fatalf("updated pseudonymised IPv6 resp address %s is not the expected address %s", pseudoRespAddrUpdated6, expectedPseudoRespAddrUpdated6)
 	}
 
-	if dtm.cryptopanCache != nil {
-		t.Logf("number of pseudonymisation cache entries before end: %d", dtm.cryptopanCache.Len())
-		for _, key := range dtm.cryptopanCache.Keys() {
-			value, ok := dtm.cryptopanCache.Get(key)
+	if edm.cryptopanCache != nil {
+		t.Logf("number of pseudonymisation cache entries before end: %d", edm.cryptopanCache.Len())
+		for _, key := range edm.cryptopanCache.Keys() {
+			value, ok := edm.cryptopanCache.Get(key)
 			if !ok {
 				t.Fatalf("unable to extract value for key before end: %s", key)
 			}
@@ -718,9 +718,9 @@ func BenchmarkPseudonymiseDnstapWithCache4(b *testing.B) {
 
 	cryptopanCacheSize := 10
 
-	dtm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false, false)
+	edm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false, false)
 	if err != nil {
-		b.Fatalf("unable to setup dtm: %s", err)
+		b.Fatalf("unable to setup edm: %s", err)
 	}
 
 	b.ResetTimer()
@@ -731,7 +731,7 @@ func BenchmarkPseudonymiseDnstapWithCache4(b *testing.B) {
 				ResponseAddress: origRespAddr4.AsSlice(),
 			},
 		}
-		dtm.pseudonymiseDnstap(dt4)
+		edm.pseudonymiseDnstap(dt4)
 	}
 }
 
@@ -751,9 +751,9 @@ func BenchmarkPseudonymiseDnstapWithoutCache4(b *testing.B) {
 
 	cryptopanCacheSize := 0
 
-	dtm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false, false)
+	edm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false, false)
 	if err != nil {
-		b.Fatalf("unable to setup dtm: %s", err)
+		b.Fatalf("unable to setup edm: %s", err)
 	}
 
 	b.ResetTimer()
@@ -764,7 +764,7 @@ func BenchmarkPseudonymiseDnstapWithoutCache4(b *testing.B) {
 				ResponseAddress: origRespAddr4.AsSlice(),
 			},
 		}
-		dtm.pseudonymiseDnstap(dt4)
+		edm.pseudonymiseDnstap(dt4)
 	}
 }
 
@@ -784,9 +784,9 @@ func BenchmarkPseudonymiseDnstapWithCache6(b *testing.B) {
 
 	cryptopanCacheSize := 10
 
-	dtm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false, false)
+	edm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false, false)
 	if err != nil {
-		b.Fatalf("unable to setup dtm: %s", err)
+		b.Fatalf("unable to setup edm: %s", err)
 	}
 
 	b.ResetTimer()
@@ -797,7 +797,7 @@ func BenchmarkPseudonymiseDnstapWithCache6(b *testing.B) {
 				ResponseAddress: origRespAddr6.AsSlice(),
 			},
 		}
-		dtm.pseudonymiseDnstap(dt6)
+		edm.pseudonymiseDnstap(dt6)
 	}
 }
 
@@ -817,9 +817,9 @@ func BenchmarkPseudonymiseDnstapWithoutCache6(b *testing.B) {
 
 	cryptopanCacheSize := 0
 
-	dtm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false, false)
+	edm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false, false)
 	if err != nil {
-		b.Fatalf("unable to setup dtm: %s", err)
+		b.Fatalf("unable to setup edm: %s", err)
 	}
 
 	b.ResetTimer()
@@ -830,7 +830,7 @@ func BenchmarkPseudonymiseDnstapWithoutCache6(b *testing.B) {
 				ResponseAddress: origRespAddr6.AsSlice(),
 			},
 		}
-		dtm.pseudonymiseDnstap(dt6)
+		edm.pseudonymiseDnstap(dt6)
 	}
 }
 

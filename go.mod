@@ -1,4 +1,4 @@
-module github.com/dnstapir/dtm
+module github.com/dnstapir/edm
 
 go 1.22.3
 
