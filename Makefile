@@ -13,7 +13,7 @@ endif
 all:
 
 container:
-	docker buildx bake
+	KO_DOCKER_REPO=ko.local ko build --bare
 
 build:
 	go mod download
