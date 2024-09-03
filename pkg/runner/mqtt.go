@@ -50,7 +50,6 @@ func (edm *dnstapMinimiser) newAutoPahoClientConfig(caCertPool *x509.CertPool, s
 }
 
 func (edm *dnstapMinimiser) runAutoPaho(cm *autopaho.ConnectionManager, topic string, mqttJWK jwk.Key) {
-	edm.autopahoWg.Add(1)
 	defer edm.autopahoWg.Done()
 	for {
 		// AwaitConnection will return immediately if connection is up; adding this call stops publication whilst

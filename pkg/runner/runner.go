@@ -513,6 +513,7 @@ func (edm *dnstapMinimiser) setupMQTT() {
 	}
 
 	// Connect to the broker - this will return immediately after initiating the connection process
+	edm.autopahoWg.Add(1)
 	go edm.runAutoPaho(autopahoCm, viper.GetString("mqtt-topic"), mqttJWK)
 }
 
