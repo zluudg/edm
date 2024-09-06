@@ -1,11 +1,14 @@
 name: Build container
 
 on:
-  #schedule:
-  #  - cron: "0 10 * * *"
-  push:
+  workflow_run:
+    workflows:
+      - "Build"
     branches:
       - "main"
+    types:
+      - completed
+  push:
     tags:
       - "v*.*.*"
 
