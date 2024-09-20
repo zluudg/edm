@@ -341,7 +341,7 @@ func TestSetSessionLabels(t *testing.T) {
 	}
 }
 
-func TestDTMStatusBitsMulti(t *testing.T) {
+func TestEDMStatusBitsMulti(t *testing.T) {
 
 	expectedString := "well-known-exact|well-known-wildcard"
 
@@ -354,7 +354,7 @@ func TestDTMStatusBitsMulti(t *testing.T) {
 	}
 }
 
-func TestDTMStatusBitsSingle(t *testing.T) {
+func TestEDMStatusBitsSingle(t *testing.T) {
 
 	expectedString := "well-known-exact"
 
@@ -366,7 +366,7 @@ func TestDTMStatusBitsSingle(t *testing.T) {
 	}
 }
 
-func TestDTMStatusBitsMax(t *testing.T) {
+func TestEDMStatusBitsMax(t *testing.T) {
 
 	expectedString := "unknown flags in status"
 
@@ -378,7 +378,7 @@ func TestDTMStatusBitsMax(t *testing.T) {
 	}
 }
 
-func TestDTMStatusBitsUnknown(t *testing.T) {
+func TestEDMStatusBitsUnknown(t *testing.T) {
 
 	expectedString := "unknown flags in status"
 
@@ -390,7 +390,7 @@ func TestDTMStatusBitsUnknown(t *testing.T) {
 	}
 }
 
-func TestDTMIPBytesToInt(t *testing.T) {
+func TestEDMIPBytesToInt(t *testing.T) {
 
 	ipv4AddrString := "198.51.100.15"
 
@@ -418,7 +418,7 @@ func TestDTMIPBytesToInt(t *testing.T) {
 	}
 }
 
-func TestDTMIP6BytesToInt(t *testing.T) {
+func TestEDMIP6BytesToInt(t *testing.T) {
 
 	ipv6AddrString := "2001:db8:1122:3344:5566:7788:99aa:bbcc"
 
