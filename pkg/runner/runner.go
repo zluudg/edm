@@ -1869,42 +1869,42 @@ func (edm *dnstapMinimiser) pseudonymiseIP(ipBytes []byte) ([]byte, error) {
 		// Replace address with zeroes since we do not know if
 		// the contained junk is somehow sensitive
 		return make([]byte, len(ipBytes)), errors.New("unable to parse addr")
+	}
+
+	var pseudonymisedAddr netip.Addr
+	var cacheHit bool
+
+	if edm.cryptopanCache != nil {
+		pseudonymisedAddr, cacheHit = edm.cryptopanCache.Get(addr)
+	}
+
+	if cacheHit {
+		edm.cryptopanCacheHit.Inc()
 	} else {
-		var pseudonymisedAddr netip.Addr
-		var ok bool
+		// Not in cache or cache disabled, calculate the pseudonymised IP
+		pseudonymisedAddr, ok = netip.AddrFromSlice(edm.cryptopan.Anonymize(addr.AsSlice()))
+		if !ok {
+			// Replace address with zeroes here as well
+			// since we do not know if the contained junk
+			// is somehow sensitive.
+			return make([]byte, len(ipBytes)), errors.New("unable to anonymise addr")
+		}
+
+		// cryptopan.Anonymize() returns IPv4 addresses via net.IPv4(),
+		// meaning we will get IPv4 addresses mapped to IPv6, e.g.
+		// ::ffff:127.0.0.1. It is easier to handle these as native
+		// IPv4 addresses in our system so call Unmap() on it.
+		pseudonymisedAddr = pseudonymisedAddr.Unmap()
 
 		if edm.cryptopanCache != nil {
-			pseudonymisedAddr, ok = edm.cryptopanCache.Get(addr)
-		}
-
-		if ok {
-			edm.cryptopanCacheHit.Inc()
-		} else {
-			// Not in cache or cache disabled, calculate the pseudonymised IP
-			pseudonymisedAddr, ok = netip.AddrFromSlice(edm.cryptopan.Anonymize(addr.AsSlice()))
-			if !ok {
-				// Replace address with zeroes here as well
-				// since we do not know if the contained junk
-				// is somehow sensitive.
-				return make([]byte, len(ipBytes)), errors.New("unable to anonymise addr")
-			}
-
-			// cryptopan.Anonymize() returns IPv4 addresses via net.IPv4(),
-			// meaning we will get IPv4 addresses mapped to IPv6, e.g.
-			// ::ffff:127.0.0.1. It is easier to handle these as native
-			// IPv4 addresses in our system so call Unmap() on it.
-			pseudonymisedAddr = pseudonymisedAddr.Unmap()
-
-			if edm.cryptopanCache != nil {
-				evicted := edm.cryptopanCache.Add(addr, pseudonymisedAddr)
-				if evicted {
-					edm.cryptopanCacheEvicted.Inc()
-				}
+			evicted := edm.cryptopanCache.Add(addr, pseudonymisedAddr)
+			if evicted {
+				edm.cryptopanCacheEvicted.Inc()
 			}
 		}
-
-		return pseudonymisedAddr.AsSlice(), nil
 	}
+
+	return pseudonymisedAddr.AsSlice(), nil
 }
 
 func timeUntilNextMinute() time.Duration {

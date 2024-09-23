@@ -688,6 +688,75 @@ func TestPseudonymiseDnstap(t *testing.T) {
 			t.Logf("reset cache key: %s, value: %s", key, value)
 		}
 	}
+
+	// Replace the cryptopan instance with uncached version and the first key and verify we get the same pseudonymised results
+	err = edm.setCryptopan("key1", cryptopanSalt, 0)
+	if err != nil {
+		t.Fatalf("unable to call edm.SetCryptopan with 0 cache size: %s", err)
+	}
+
+	// Reset the addresses and pseudonymise again with the updated key
+	dt4.Message.QueryAddress = origQueryAddr4.AsSlice()
+	dt4.Message.ResponseAddress = origRespAddr4.AsSlice()
+	dt6.Message.QueryAddress = origQueryAddr6.AsSlice()
+	dt6.Message.ResponseAddress = origRespAddr6.AsSlice()
+
+	edm.pseudonymiseDnstap(dt4)
+	edm.pseudonymiseDnstap(dt6)
+
+	uncachedPseudoQueryAddr4, ok := netip.AddrFromSlice(dt4.Message.QueryAddress)
+	if !ok {
+		t.Fatal("unable to parse uncached IPv4 QueryAddress")
+	}
+	uncachedPseudoRespAddr4, ok := netip.AddrFromSlice(dt4.Message.ResponseAddress)
+	if !ok {
+		t.Fatal("unable to parse uncached IPv4 ResponseAddress")
+	}
+	uncachedPseudoQueryAddr6, ok := netip.AddrFromSlice(dt6.Message.QueryAddress)
+	if !ok {
+		t.Fatal("unable to parse uncached IPv6 QueryAddress")
+	}
+	uncachedPseudoRespAddr6, ok := netip.AddrFromSlice(dt6.Message.ResponseAddress)
+	if !ok {
+		t.Fatal("unable to parse uncached IPv6 ResponseAddress")
+	}
+
+	// Verify we are not accidentally getting IPv4-mapped IPv6 address
+	if !uncachedPseudoQueryAddr4.Is4() {
+		t.Fatalf("uncached pseudonymised IPv4 query address appears to be IPv4-mapped IPv6 address: %s", uncachedPseudoQueryAddr4)
+	}
+	if !uncachedPseudoRespAddr4.Is4() {
+		t.Fatalf("uncached pseudonymised IPv4 response address appears to be IPv4-mapped IPv6 address: %s", uncachedPseudoRespAddr4)
+	}
+
+	// Verify they are different from the original addresses
+	if origQueryAddr4 == uncachedPseudoQueryAddr4 {
+		t.Fatalf("uncached pseudonymised IPv4 query address %s is the same as the orignal address %s", uncachedPseudoQueryAddr4, origQueryAddr4)
+	}
+	if origRespAddr4 == uncachedPseudoRespAddr4 {
+		t.Fatalf("uncached pseudonymised IPv4 response address %s is the same as the orignal address %s", uncachedPseudoRespAddr4, origRespAddr4)
+	}
+	if origQueryAddr6 == uncachedPseudoQueryAddr6 {
+		t.Fatalf("uncached pseudonymised IPv6 query address %s is the same as the orignal address %s", uncachedPseudoQueryAddr6, origQueryAddr6)
+	}
+	if origRespAddr6 == uncachedPseudoRespAddr6 {
+		t.Fatalf("uncached pseudonymised IPv6 response address %s is the same as the orignal address %s", uncachedPseudoRespAddr6, origRespAddr6)
+	}
+
+	// Verify they are different as expected
+	if uncachedPseudoQueryAddr4 != expectedPseudoQueryAddr4 {
+		t.Fatalf("uncached pseudonymised IPv4 query address %s is not the expected address %s", uncachedPseudoQueryAddr4, expectedPseudoQueryAddr4)
+	}
+	if uncachedPseudoRespAddr4 != expectedPseudoRespAddr4 {
+		t.Fatalf("uncached pseudonymised IPv4 resp address %s is not the expected address %s", uncachedPseudoRespAddr4, expectedPseudoRespAddr4)
+	}
+	if uncachedPseudoQueryAddr6 != expectedPseudoQueryAddr6 {
+		t.Fatalf("uncached pseudonymised IPv6 query address %s is not the expected address %s", uncachedPseudoQueryAddr6, expectedPseudoQueryAddr6)
+	}
+	if uncachedPseudoRespAddr6 != expectedPseudoRespAddr6 {
+		t.Fatalf("uncached pseudonymised IPv6 resp address %s is not the expected address %s", uncachedPseudoRespAddr6, expectedPseudoRespAddr6)
+	}
+
 }
 
 func BenchmarkPseudonymiseDnstapWithCache4(b *testing.B) {
