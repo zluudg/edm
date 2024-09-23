@@ -34,7 +34,7 @@ import (
 	"github.com/dnstapir/edm/pkg/protocols"
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/fsnotify/fsnotify"
-	_ "github.com/grafana/pyroscope-go/godeltaprof/http/pprof"
+	_ "github.com/grafana/pyroscope-go/godeltaprof/http/pprof" // revive linter: keep blank import close to where it is used for now.
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/miekg/dns"
