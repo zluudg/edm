@@ -1916,7 +1916,7 @@ func (edm *dnstapMinimiser) dataCollector(wg *sync.WaitGroup, wkd *wellKnownDoma
 	defer wg.Done()
 
 	// Keep track of if we have recorded any dnstap packets in session data
-	var session_updated bool
+	var sessionUpdated bool
 
 	// Start retryer, handles instances where the received update has a
 	// dawgModTime that is no longer valid becuase it has been rotated.
@@ -1936,7 +1936,7 @@ collectorLoop:
 		select {
 		case sd := <-edm.sessionCollectorCh:
 			sessions = append(sessions, sd)
-			session_updated = true
+			sessionUpdated = true
 
 		case wu := <-wkd.updateCh:
 			// It is possible an update sitting in the queue has
@@ -1992,7 +1992,7 @@ collectorLoop:
 			// We want to tick at the start of each minute
 			ticker.Reset(timeUntilNextMinute())
 
-			if session_updated {
+			if sessionUpdated {
 				ps := &prevSessions{
 					sessions:     sessions,
 					rotationTime: ts,
@@ -2001,7 +2001,7 @@ collectorLoop:
 				sessions = []*sessionData{}
 
 				// We have reset the sessions slice
-				session_updated = false
+				sessionUpdated = false
 
 				edm.sessionWriterCh <- ps
 			}
