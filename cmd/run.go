@@ -12,7 +12,7 @@ import (
 var runCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Run edm in dnstap capture mode",
-	Run: func(cmd *cobra.Command, args []string) {
+	Run: func(_ *cobra.Command, _ []string) {
 		runner.Run()
 	},
 }
