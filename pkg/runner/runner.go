@@ -967,7 +967,7 @@ type wkdUpdate struct {
 	retryLimit  int
 }
 
-func (wkd *wellKnownDomainsTracker) lookup(ipBytes []byte, msg *dns.Msg) (int, bool, time.Time) {
+func (wkd *wellKnownDomainsTracker) lookup(msg *dns.Msg) (int, bool, time.Time) {
 
 	wkd.mutex.RLock()
 	defer wkd.mutex.RUnlock()
@@ -987,7 +987,7 @@ func (wkd *wellKnownDomainsTracker) updateRetryer(edm *dnstapMinimiser, wg *sync
 			continue
 		}
 
-		dawgIndex, suffixMatch, dawgModTime := wkd.lookup(wu.ip.AsSlice(), wu.msg)
+		dawgIndex, suffixMatch, dawgModTime := wkd.lookup(wu.msg)
 		if dawgIndex == dawgNotFound {
 			edm.log.Info("ignoring wkd update because name does not exist in updated wkd tracker", "update_dawg_modtime", wkd.dawgModTime, "wkd_dawg_modtime", wkd.dawgModTime)
 			continue
@@ -1213,7 +1213,7 @@ minimiserLoop:
 
 			// We pass on the client address for cardinality
 			// measurements.
-			dawgIndex, suffixMatch, dawgModTime := wkdTracker.lookup(dangerRealClientIP, msg)
+			dawgIndex, suffixMatch, dawgModTime := wkdTracker.lookup(msg)
 			if dawgIndex != dawgNotFound {
 				wkdTracker.sendUpdate(dangerRealClientIP, msg, dawgIndex, suffixMatch, dawgModTime)
 				if edm.debug {

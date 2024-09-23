@@ -49,14 +49,10 @@ func BenchmarkWKDTLookup(b *testing.B) {
 
 	m := new(dns.Msg)
 	m.SetQuestion("google.com.", dns.TypeA)
-	ip, err := netip.ParseAddr("127.0.0.1")
-	if err != nil {
-		b.Fatal(err)
-	}
 
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
-		wkdTracker.lookup(ip.AsSlice(), m)
+		wkdTracker.lookup(m)
 	}
 }
 
@@ -151,38 +147,30 @@ func TestWKD(t *testing.T) {
 		t.Fatalf("unable to set HLL defaults: %s", err)
 	}
 
-	queryAddr4 := netip.MustParseAddr("198.51.100.20")
-	queryAddr6 := netip.MustParseAddr("2001:db8:1122:3344:5566:7788:99aa:bbcc")
-
 	var wkdLookupTests = []struct {
-		name    string
-		domain  string
-		known   bool
-		address []byte
+		name   string
+		domain string
+		known  bool
 	}{
 		{
-			name:    "known IPv4",
-			domain:  "example.com.",
-			known:   true,
-			address: queryAddr4.AsSlice(),
+			name:   "known IPv4",
+			domain: "example.com.",
+			known:  true,
 		},
 		{
-			name:    "not known IPv4",
-			domain:  "www.example.com.",
-			known:   false,
-			address: queryAddr4.AsSlice(),
+			name:   "not known IPv4",
+			domain: "www.example.com.",
+			known:  false,
 		},
 		{
-			name:    "known IPv6",
-			domain:  "example.com.",
-			known:   true,
-			address: queryAddr6.AsSlice(),
+			name:   "known IPv6",
+			domain: "example.com.",
+			known:  true,
 		},
 		{
-			name:    "not known IPv6",
-			domain:  "www.example.com.",
-			known:   false,
-			address: queryAddr6.AsSlice(),
+			name:   "not known IPv6",
+			domain: "www.example.com.",
+			known:  false,
 		},
 	}
 
@@ -190,7 +178,7 @@ func TestWKD(t *testing.T) {
 		m := new(dns.Msg)
 		m.SetQuestion(test.domain, dns.TypeA)
 
-		dawgIndex, _, _ := wkd.lookup(test.address, m)
+		dawgIndex, _, _ := wkd.lookup(m)
 
 		known := dawgIndex != dawgNotFound
 
