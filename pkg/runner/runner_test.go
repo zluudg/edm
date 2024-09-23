@@ -396,13 +396,13 @@ func TestEDMIPBytesToInt(t *testing.T) {
 	constructedV4Data := []byte{}
 	constructedV4Data = binary.BigEndian.AppendUint32(constructedV4Data, ip4Int)
 
-	constructedIp4Addr, ok := netip.AddrFromSlice(constructedV4Data)
+	constructedIP4Addr, ok := netip.AddrFromSlice(constructedV4Data)
 	if !ok {
 		t.Fatalf("unable to create netip from from constructed IPv4 bytes: %b", constructedV4Data)
 	}
 
-	if ip4Addr != constructedIp4Addr {
-		t.Fatalf("have: %s, want: %s", constructedIp4Addr, ip4Addr)
+	if ip4Addr != constructedIP4Addr {
+		t.Fatalf("have: %s, want: %s", constructedIP4Addr, ip4Addr)
 	}
 }
 
@@ -425,13 +425,13 @@ func TestEDMIP6BytesToInt(t *testing.T) {
 	constructedV6Data = binary.BigEndian.AppendUint64(constructedV6Data, ip6Network)
 	constructedV6Data = binary.BigEndian.AppendUint64(constructedV6Data, ip6Host)
 
-	constructedIp6Addr, ok := netip.AddrFromSlice(constructedV6Data)
+	constructedIP6Addr, ok := netip.AddrFromSlice(constructedV6Data)
 	if !ok {
 		t.Fatalf("unable to create netip from from constructed IPv6 bytes: %b", constructedV6Data)
 	}
 
-	if ip6Addr != constructedIp6Addr {
-		t.Fatalf("have: %s, want: %s", constructedIp6Addr, ip6Addr)
+	if ip6Addr != constructedIP6Addr {
+		t.Fatalf("have: %s, want: %s", constructedIP6Addr, ip6Addr)
 	}
 }
 
