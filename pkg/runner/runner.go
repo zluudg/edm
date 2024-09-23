@@ -743,7 +743,7 @@ func Run() {
 	for minimiserID := 0; minimiserID < numMinimiserWorkers; minimiserID++ {
 		edm.log.Info("Run: starting minimiser worker", "minimiser_id", minimiserID)
 		minimiserWg.Add(1)
-		go edm.runMinimiser(minimiserID, &minimiserWg, dawgFile, seenQnameLRU, pdb, viper.GetInt("new-qname-buffer"), viper.GetBool("disable-session-files"), debugDnstapFile, viper.GetBool("disable-histogram-sender"), labelLimit, wkdTracker)
+		go edm.runMinimiser(minimiserID, &minimiserWg, seenQnameLRU, pdb, viper.GetInt("new-qname-buffer"), viper.GetBool("disable-session-files"), debugDnstapFile, viper.GetBool("disable-histogram-sender"), labelLimit, wkdTracker)
 	}
 
 	// Start dnstap.Input
@@ -1147,7 +1147,7 @@ func (edm *dnstapMinimiser) qnameSeen(msg *dns.Msg, seenQnameLRU *lru.Cache[stri
 // runMinimiser reads frames from the inputChannel, doing any modifications and
 // then passes them on to a dnstap.Output. To gracefully stop
 // runMinimiser() you can call edm.stop().
-func (edm *dnstapMinimiser) runMinimiser(minimiserID int, wg *sync.WaitGroup, dawgFile string, seenQnameLRU *lru.Cache[string, struct{}], pdb *pebble.DB, newQnameBuffer int, disableSessionFiles bool, debugDnstapFile *os.File, disableHistogramSender bool, labelLimit int, wkdTracker *wellKnownDomainsTracker) {
+func (edm *dnstapMinimiser) runMinimiser(minimiserID int, wg *sync.WaitGroup, seenQnameLRU *lru.Cache[string, struct{}], pdb *pebble.DB, newQnameBuffer int, disableSessionFiles bool, debugDnstapFile *os.File, disableHistogramSender bool, labelLimit int, wkdTracker *wellKnownDomainsTracker) {
 	defer wg.Done()
 
 	dt := &dnstap.Dnstap{}
