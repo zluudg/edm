@@ -25,7 +25,7 @@ type aggregateSender struct {
 	signingKey        *ecdsa.PrivateKey
 	caCertPool        *x509.CertPool
 	clientCert        tls.Certificate
-	signingHttpClient *httpsign.Client
+	signingHTTPClient *httpsign.Client
 }
 
 func (edm *dnstapMinimiser) newAggregateSender(aggrecURL *url.URL, signingKeyName string, signingKey *ecdsa.PrivateKey, caCertPool *x509.CertPool, clientCert tls.Certificate) aggregateSender {
@@ -58,7 +58,7 @@ func (edm *dnstapMinimiser) newAggregateSender(aggrecURL *url.URL, signingKeyNam
 		signingKey:        signingKey,
 		caCertPool:        caCertPool,
 		clientCert:        clientCert,
-		signingHttpClient: client,
+		signingHTTPClient: client,
 	}
 }
 
@@ -117,7 +117,7 @@ func (as aggregateSender) send(fileName string, ts time.Time, duration time.Dura
 
 	as.edm.log.Info("aggregateSender.send", "filename", fileName, "url", histogramURL)
 	startTime := time.Now()
-	res, err := as.signingHttpClient.Do(req)
+	res, err := as.signingHTTPClient.Do(req)
 	elapsedTime := time.Since(startTime)
 	if err != nil {
 		return fmt.Errorf("sendAggregateFile: unable to send request, elapsed time %s: %w", elapsedTime, err)
