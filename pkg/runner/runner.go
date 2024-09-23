@@ -981,7 +981,7 @@ func (wkd *wellKnownDomainsTracker) updateRetryer(edm *dnstapMinimiser, wg *sync
 	defer wg.Done()
 
 	for wu := range wkd.retryCh {
-		wu.retry += 1
+		wu.retry++
 		if wu.retry >= wu.retryLimit {
 			edm.log.Info("ignoring wkd update since retry counter hit retry limit", "retry", wu.retry, "retry_limit", wu.retryLimit)
 			continue
