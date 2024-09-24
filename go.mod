@@ -20,6 +20,7 @@ require (
 	github.com/xitongsys/parquet-go v1.6.2
 	github.com/yaronf/httpsign v0.3.1
 	github.com/yawning/cryptopan v0.0.0-20170504040949-65bca51288fe
+	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba
 	golang.org/x/crypto v0.27.0
 	google.golang.org/protobuf v1.34.2
 )

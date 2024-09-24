@@ -49,6 +49,7 @@ func init() {
 
 	runCmd.Flags().String("cryptopan-key-salt", "edm-kdf-salt-val", "the salt used for key derivation")
 	runCmd.Flags().String("well-known-domains", "well-known-domains.dawg", "the dawg file used for filtering well-known domains")
+	runCmd.Flags().String("ignored-client-ip-file", "", "file containing a newline separated list of IPv4/IPv6 CIDRs of DNS clients that will be ignored")
 	runCmd.Flags().String("data-dir", "/var/lib/edm", "directory where output data is written")
 	runCmd.Flags().Int("minimiser-workers", 1, "how many minimiser workers to start (0 means same as GOMAXPROCS)")
 	runCmd.Flags().Bool("disable-mqtt", false, "disable MQTT message sending")

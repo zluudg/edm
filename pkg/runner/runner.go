@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bufio"
 	"context"
 	"crypto/ecdsa"
 	"crypto/tls"
@@ -48,6 +49,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/xitongsys/parquet-go/writer"
 	"github.com/yawning/cryptopan"
+	"go4.org/netipx"
 	"golang.org/x/crypto/argon2"
 	"google.golang.org/protobuf/proto"
 )
@@ -358,10 +360,10 @@ func (edm *dnstapMinimiser) setCryptopan(key string, salt string, cacheEntries i
 		return fmt.Errorf("setCryptopan: unable to create cryptopan: %w", err)
 	}
 
-	edm.mutex.Lock()
+	edm.cryptopanMutex.Lock()
 	edm.cryptopan = cpn
 	edm.cryptopanCache = cpnCache
-	edm.mutex.Unlock()
+	edm.cryptopanMutex.Unlock()
 
 	return nil
 }
@@ -517,6 +519,140 @@ func (edm *dnstapMinimiser) setupMQTT() {
 	go edm.runAutoPaho(autopahoCm, viper.GetString("mqtt-topic"), mqttJWK)
 }
 
+func (edm *dnstapMinimiser) setIgnoredClientIPs(ignoredClientsFileName string) error {
+	if ignoredClientsFileName == "" {
+		return nil
+	}
+
+	fh, err := os.Open(filepath.Clean(ignoredClientsFileName))
+	if err != nil {
+		return fmt.Errorf("setIgnoredClientsIPs: unable to open file: %w", err)
+	}
+	defer func() {
+		err := fh.Close()
+		if err != nil {
+			edm.log.Error("setIgnoredClientIPs: failed closing fh", "filename", ignoredClientsFileName, "error", err)
+		}
+	}()
+
+	var b netipx.IPSetBuilder
+
+	numCIDRs := 0
+	scanner := bufio.NewScanner(fh)
+	for scanner.Scan() {
+		if scanner.Text() == "" || strings.HasPrefix(scanner.Text(), "#") {
+			// Skip empty lines and comments
+			continue
+		}
+		prefix, err := netip.ParsePrefix(scanner.Text())
+		if err != nil {
+			return fmt.Errorf("setIgnoredClientIPs: unable to parse ignored prefix '%s'", scanner.Text())
+		}
+		b.AddPrefix(prefix)
+		numCIDRs++
+	}
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintln(os.Stderr, "reading standard input:", err)
+		return fmt.Errorf("setIgnoredClientIPs: error reading from '%s': %w", ignoredClientsFileName, err)
+	}
+
+	ipset, err := b.IPSet()
+	if err != nil {
+		return fmt.Errorf("setIgnoredClientIPs: IPSet creation failed: %w", err)
+	}
+
+	edm.ignoredClientsIPSetMutex.Lock()
+	edm.ignoredClientsIPSet = ipset
+	edm.ignoredClientsIPSetMutex.Unlock()
+
+	edm.log.Info("setIgnoredClientIPs: DNS client ignore list has been loaded", "filename", ignoredClientsFileName, "num_cidrs", numCIDRs)
+
+	return nil
+}
+
+func (edm *dnstapMinimiser) fsEventWatcher() {
+	// Like in
+	// https://github.com/fsnotify/fsnotify/blob/main/cmd/fsnotify/dedup.go
+	// we keep a timer per registered filename
+	timers := map[string]*time.Timer{}
+	timersMutex := new(sync.Mutex)
+
+	callbackHandler := func(callback func(string) error, name string) func() {
+		return func() {
+			err := callback(name)
+			if err != nil {
+				edm.log.Error("fsEventWatcher: callback error", "filename", name, "error", err)
+			}
+
+			// Cleanup expired timer
+			timersMutex.Lock()
+			delete(timers, name)
+			timersMutex.Unlock()
+		}
+	}
+
+	for {
+		select {
+		case event, ok := <-edm.fsWatcher.Events:
+			if !ok {
+				// watcher is closed
+				return
+			}
+
+			if !event.Has(fsnotify.Write) && !event.Has(fsnotify.Create) {
+				continue
+			}
+
+			cleanName := filepath.Clean(event.Name)
+
+			edm.fsWatcherMutex.RLock()
+			callback, ok := edm.fsWatcherFuncs[cleanName]
+			edm.fsWatcherMutex.RUnlock()
+			if !ok {
+				if edm.debug {
+					edm.log.Info("skipping event for unregistered file", "op", event.Op.String(), "filename", cleanName)
+				}
+				continue
+			}
+
+			timersMutex.Lock()
+			t, ok := timers[cleanName]
+			timersMutex.Unlock()
+			if !ok {
+				t = time.AfterFunc(math.MaxInt64, callbackHandler(callback, cleanName))
+				t.Stop()
+
+				timersMutex.Lock()
+				timers[cleanName] = t
+				timersMutex.Unlock()
+			}
+
+			t.Reset(100 * time.Millisecond)
+		case err, ok := <-edm.fsWatcher.Errors:
+			if !ok {
+				// watcher is closed
+				return
+			}
+			edm.log.Error("fsEventWatcher: error received", "error", err)
+		}
+	}
+}
+
+func (edm *dnstapMinimiser) registerFSWatcher(filename string, callback func(string) error) error {
+	// Adding the same dir multiple times is a no-op, so it is OK to
+	// add multiple files from the same directory.
+	err := edm.fsWatcher.Add(filepath.Dir(filename))
+	if err != nil {
+		return fmt.Errorf("registerFSWatcher: unable to add directory '%s': %w", filepath.Dir(filename), err)
+	}
+
+	edm.fsWatcherMutex.Lock()
+	edm.fsWatcherFuncs[filename] = callback
+	edm.fsWatcherMutex.Unlock()
+
+	return nil
+}
+
 func Run() {
 
 	// Logger used for all output
@@ -547,6 +683,21 @@ func Run() {
 		os.Exit(1)
 	}
 	defer edm.stop()
+	defer edm.fsWatcher.Close()
+
+	err = edm.setIgnoredClientIPs(viper.GetString("ignored-client-ip-file"))
+	if err != nil {
+		logger.Error("unable to configure ignored client IPs", "error", err)
+		os.Exit(1)
+	}
+
+	err = edm.registerFSWatcher(viper.GetString("ignored-client-ip-file"), edm.setIgnoredClientIPs)
+	if err != nil {
+		logger.Error("unable to register fsWatcher callback", "filename", viper.GetString("ignored-client-ip-file"), "error", err)
+		os.Exit(1)
+	}
+
+	go edm.fsEventWatcher()
 
 	viperNotifyCh := make(chan fsnotify.Event)
 
@@ -776,33 +927,40 @@ func Run() {
 }
 
 type dnstapMinimiser struct {
-	inputChannel            chan []byte          // the channel expected to be passed to dnstap ReadInto()
-	log                     *slog.Logger         // any information logging is sent here
-	cryptopan               *cryptopan.Cryptopan // used for pseudonymising IP addresses
-	cryptopanCache          *lru.Cache[netip.Addr, netip.Addr]
-	promReg                 *prometheus.Registry
-	cryptopanCacheHit       prometheus.Counter
-	cryptopanCacheEvicted   prometheus.Counter
-	dnstapProcessed         prometheus.Counter
-	newQnameQueued          prometheus.Counter
-	newQnameDiscarded       prometheus.Counter
-	seenQnameLRUEvicted     prometheus.Counter
-	newQnameChannelLen      prometheus.Gauge
-	ctx                     context.Context
-	stop                    context.CancelFunc // call this to gracefully stop runMinimiser()
-	debug                   bool               // if we should print debug messages during operation
-	mutex                   sync.RWMutex       // Mutex for protecting updates to fields at runtime
-	sessionWriterCh         chan *prevSessions
-	histogramWriterCh       chan *wellKnownDomainsData
-	newQnamePublisherCh     chan *protocols.EventsMqttMessageNewQnameJson
-	sessionCollectorCh      chan *sessionData
-	histogramSenderDisabled bool
-	aggregSender            aggregateSender
-	mqttDisabled            bool
-	mqttPubCh               chan []byte
-	autopahoCtx             context.Context
-	autopahoCancel          context.CancelFunc
-	autopahoWg              sync.WaitGroup
+	inputChannel             chan []byte          // the channel expected to be passed to dnstap ReadInto()
+	log                      *slog.Logger         // any information logging is sent here
+	cryptopan                *cryptopan.Cryptopan // used for pseudonymising IP addresses
+	cryptopanCache           *lru.Cache[netip.Addr, netip.Addr]
+	cryptopanMutex           sync.RWMutex // Mutex for protecting updates cryptopan at runtime
+	promReg                  *prometheus.Registry
+	cryptopanCacheHit        prometheus.Counter
+	cryptopanCacheEvicted    prometheus.Counter
+	dnstapProcessed          prometheus.Counter
+	newQnameQueued           prometheus.Counter
+	newQnameDiscarded        prometheus.Counter
+	seenQnameLRUEvicted      prometheus.Counter
+	newQnameChannelLen       prometheus.Gauge
+	clientIPIgnored          prometheus.Counter
+	clientIPIgnoredError     prometheus.Counter
+	ctx                      context.Context
+	stop                     context.CancelFunc // call this to gracefully stop runMinimiser()
+	debug                    bool               // if we should print debug messages during operation
+	sessionWriterCh          chan *prevSessions
+	histogramWriterCh        chan *wellKnownDomainsData
+	newQnamePublisherCh      chan *protocols.EventsMqttMessageNewQnameJson
+	sessionCollectorCh       chan *sessionData
+	histogramSenderDisabled  bool
+	aggregSender             aggregateSender
+	mqttDisabled             bool
+	mqttPubCh                chan []byte
+	autopahoCtx              context.Context
+	autopahoCancel           context.CancelFunc
+	autopahoWg               sync.WaitGroup
+	ignoredClientsIPSet      *netipx.IPSet
+	ignoredClientsIPSetMutex sync.RWMutex // Mutex for protecting updates to ignored client IPs at runtime
+	fsWatcher                *fsnotify.Watcher
+	fsWatcherFuncs           map[string]func(string) error
+	fsWatcherMutex           sync.RWMutex
 }
 
 func createCryptopan(key string, salt string) (*cryptopan.Cryptopan, error) {
@@ -876,6 +1034,16 @@ func newDnstapMinimiser(logger *slog.Logger, cryptopanKey string, cryptopanSalt 
 		Help: "The number of new_qname events in the channel buffer",
 	})
 
+	edm.clientIPIgnored = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
+		Name: "edm_ignored_client_ip_total",
+		Help: "The total number of times we have ignored a dnstap packet because of client IP",
+	})
+
+	edm.clientIPIgnoredError = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
+		Name: "edm_ignored_client_ip_error_total",
+		Help: "The total number of times we have ignored a dnstap packet because of client IP error, should always be 0",
+	})
+
 	edm.promReg = promReg
 	// Size 32 matches unexported "const outputChannelSize = 32" in
 	// https://github.com/dnstap/golang-dnstap/blob/master/dnstap.go
@@ -884,6 +1052,13 @@ func newDnstapMinimiser(logger *slog.Logger, cryptopanKey string, cryptopanSalt 
 	edm.debug = debug
 	edm.histogramSenderDisabled = histogramSenderDisabled
 	edm.mqttDisabled = mqttDisabled
+
+	edm.fsWatcher, err = fsnotify.NewWatcher()
+	if err != nil {
+		return nil, fmt.Errorf("newDnstapMinimiser: unable to create fsWatcher: %w", err)
+	}
+
+	edm.fsWatcherFuncs = map[string]func(string) error{}
 
 	// Setup channels for feeding writers and data senders that should do
 	// their work outside the main minimiser loop. They are buffered to
@@ -1144,6 +1319,32 @@ func (edm *dnstapMinimiser) qnameSeen(msg *dns.Msg, seenQnameLRU *lru.Cache[stri
 	return false
 }
 
+func (edm *dnstapMinimiser) clientIPIsIgnored(dt *dnstap.Dnstap) bool {
+	edm.ignoredClientsIPSetMutex.RLock()
+	defer edm.ignoredClientsIPSetMutex.RUnlock()
+
+	if edm.ignoredClientsIPSet != nil {
+		clientIP, ok := netip.AddrFromSlice(dt.Message.QueryAddress)
+		if !ok {
+			// If we have a list of clients to
+			// ignore but are not able to
+			// understand the QueryAddress lets err
+			// on the side of caution and ignore
+			// such packets as well while making
+			// noise in logs so it can be investigated
+			edm.log.Error("unable to parse QueryAddress for ignore-checking, ignoring dnstap packet to be safe, please investigate")
+			edm.clientIPIgnoredError.Inc()
+			return true
+		}
+
+		if edm.ignoredClientsIPSet.Contains(clientIP) {
+			edm.clientIPIgnored.Inc()
+			return true
+		}
+	}
+	return false
+}
+
 // runMinimiser reads frames from the inputChannel, doing any modifications and
 // then passes them on to a dnstap.Output. To gracefully stop
 // runMinimiser() you can call edm.stop().
@@ -1166,6 +1367,10 @@ minimiserLoop:
 
 			// For now we only care about response type dnstap packets
 			if isQuery {
+				continue
+			}
+
+			if edm.clientIPIsIgnored(dt) {
 				continue
 			}
 
@@ -1521,7 +1726,7 @@ func (edm *dnstapMinimiser) newQnamePublisher(wg *sync.WaitGroup) {
 		case <-edm.autopahoCtx.Done():
 			edm.log.Info("newQnamePublisher: the MQTT connection is shutting down, stop writing")
 			// No need to break out of for loop here because
-			// inputCh is already closed in Run()
+			// edm.newQnamePublisherCh is already closed in Run()
 		}
 	}
 	close(edm.mqttPubCh)
@@ -1844,7 +2049,7 @@ func (edm *dnstapMinimiser) pseudonymiseDnstap(dt *dnstap.Dnstap) {
 	var err error
 
 	// Lock is used here because the cryptopan instance can get updated at runtime.
-	edm.mutex.RLock()
+	edm.cryptopanMutex.RLock()
 
 	if dt.Message.QueryAddress != nil {
 		dt.Message.QueryAddress, err = edm.pseudonymiseIP(dt.Message.QueryAddress)
@@ -1858,8 +2063,7 @@ func (edm *dnstapMinimiser) pseudonymiseDnstap(dt *dnstap.Dnstap) {
 			edm.log.Error("pseudonymiseDnstap: unable to parse dt.Message.ResponseAddress", "error", err)
 		}
 	}
-
-	edm.mutex.RUnlock()
+	edm.cryptopanMutex.RUnlock()
 }
 
 // Pseudonymise IP address, even on error the returned []byte is usable (zeroed address)
