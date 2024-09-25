@@ -9,6 +9,7 @@ import (
 )
 
 var cfgFile string
+var edmVersion string
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -23,7 +24,9 @@ outputting minimised output data.`,
 
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
-func Execute() {
+func Execute(version string) {
+	// Set global variable so it can be used from run.go
+	edmVersion = version
 	err := rootCmd.Execute()
 	if err != nil {
 		os.Exit(1)
