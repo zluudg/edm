@@ -1,4 +1,4 @@
-# edm: edge dnstap minimiser
+# edm: Edge DNSTAP Minimiser
 
 ## About
 
