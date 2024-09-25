@@ -559,9 +559,14 @@ func (edm *dnstapMinimiser) setIgnoredClientIPs(ignoredClientsFileName string) e
 		return fmt.Errorf("setIgnoredClientIPs: error reading from '%s': %w", ignoredClientsFileName, err)
 	}
 
-	ipset, err := b.IPSet()
-	if err != nil {
-		return fmt.Errorf("setIgnoredClientIPs: IPSet creation failed: %w", err)
+	// Starts out as nil. We only set it to an initialized IPSet if there is at
+	// least one ignored client CIDR present in the input file.
+	var ipset *netipx.IPSet
+	if numCIDRs > 0 {
+		ipset, err = b.IPSet()
+		if err != nil {
+			return fmt.Errorf("setIgnoredClientIPs: IPSet creation failed: %w", err)
+		}
 	}
 
 	edm.ignoredClientsIPSetMutex.Lock()
@@ -569,7 +574,11 @@ func (edm *dnstapMinimiser) setIgnoredClientIPs(ignoredClientsFileName string) e
 	edm.ignoredClientCIDRsParsed = numCIDRs
 	edm.ignoredClientsIPSetMutex.Unlock()
 
-	edm.log.Info("setIgnoredClientIPs: DNS client ignore list has been loaded", "filename", ignoredClientsFileName, "num_cidrs", numCIDRs)
+	if ipset != nil {
+		edm.log.Info("setIgnoredClientIPs: DNS client ignore list has been loaded", "filename", ignoredClientsFileName, "num_cidrs", numCIDRs)
+	} else {
+		edm.log.Info("setIgnoredClientIPs: DNS client ignore list is empty, no clients will be ignored", "filename", ignoredClientsFileName, "num_cidrs", numCIDRs)
+	}
 
 	return nil
 }

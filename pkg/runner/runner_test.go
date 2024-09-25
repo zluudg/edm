@@ -528,7 +528,8 @@ func TestIgnoredClientIPsUnset(t *testing.T) {
 		t.Fatalf("unable to setup edm: %s", err)
 	}
 
-	// To make sure unsetting the filename used for ignored client IPs resets stuff as expected first read in a file with content
+	// To make sure unsetting the filename used for ignored client IPs
+	// resets stuff as expected first read in a file with content
 	err = edm.setIgnoredClientIPs("testdata/ignored-client-ips.valid1")
 	if err != nil {
 		t.Fatalf("unable to parse testdata: %s", err)
@@ -537,7 +538,7 @@ func TestIgnoredClientIPsUnset(t *testing.T) {
 	// Now run the function with an empty filename
 	err = edm.setIgnoredClientIPs("")
 	if err != nil {
-		t.Fatalf("unable to parse testdata: %s", err)
+		t.Fatalf("unable to set empty filename: %s", err)
 	}
 	numCIDRs := edm.getNumIgnoredClientCIDRs()
 
@@ -586,6 +587,54 @@ func TestIgnoredClientIPsUnset(t *testing.T) {
 		if ignored != test.ignored {
 			t.Fatalf("%s: (lookup for '%s'), have: %t, want: %t", test.name, test.ip, ignored, test.ignored)
 		}
+	}
+}
+
+func TestIgnoredClientIPsInvalidClient(t *testing.T) {
+	discardLogger := slog.NewTextHandler(io.Discard, nil)
+	logger := slog.New(discardLogger)
+
+	cryptopanSalt := "aabbccddeeffgghh"
+	cryptopanCacheSize := 10
+
+	edm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false, false)
+	if err != nil {
+		t.Fatalf("unable to setup edm: %s", err)
+	}
+
+	// Even if we are testing invalid data we still need to have loaded a
+	// IP file with at least one valid entry in it to even inspect the
+	// value.
+	err = edm.setIgnoredClientIPs("testdata/ignored-client-ips.valid1")
+	if err != nil {
+		t.Fatalf("unable to parse testdata: %s", err)
+	}
+
+	// Create QueryAddress that is neither 4 or 16 bytes as expected by
+	// netip.AddrFromSlice() inside edm.clientIPIsIgnored(dt). This broken
+	// content should result in the function returning "true" when the
+	// IPSet is populated.
+	dt := &dnstap.Dnstap{
+		Message: &dnstap.Message{
+			QueryAddress: make([]byte, 5),
+		},
+	}
+	ignored := edm.clientIPIsIgnored(dt)
+	if ignored != true {
+		t.Fatalf("invalid QueryAddress:, have: %t, want: %t", ignored, true)
+	}
+
+	// Also verify that if we load an empty list this means we are not
+	// inspecting client addresses at all so not even broken client
+	// addresses are ignored in this case.
+	err = edm.setIgnoredClientIPs("testdata/ignored-client-ips.empty")
+	if err != nil {
+		t.Fatalf("unable to parse testdata: %s", err)
+	}
+
+	ignored = edm.clientIPIsIgnored(dt)
+	if ignored != false {
+		t.Fatalf("invalid QueryAddress:, have: %t, want: %t", ignored, false)
 	}
 }
 
