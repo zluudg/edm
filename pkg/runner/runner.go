@@ -56,6 +56,9 @@ import (
 
 const dawgNotFound = -1
 
+// version set at build time with -ldflags="-X github.com/dnstapir/edm/pkg/runner.version=v0.0.1"
+var version = "unspecified"
+
 type edmStatusBits uint64
 
 func (dsb *edmStatusBits) String() string {
@@ -675,8 +678,19 @@ func (edm *dnstapMinimiser) registerFSWatcher(filename string, callback func(str
 
 func Run() {
 
+	defaultHostname := "edm-hostname-unknown"
+	hostname, err := os.Hostname()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "unable to get hostname, using '%s'", defaultHostname)
+		hostname = defaultHostname
+	}
+
 	// Logger used for all output
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	logger = logger.With("service", "edm")
+	logger = logger.With("hostname", hostname)
+	logger = logger.With("go_version", runtime.Version())
+	logger = logger.With("version", version)
 
 	// This makes any calls to the standard "log" package to use slog as
 	// well
