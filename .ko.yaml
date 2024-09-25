@@ -1,3 +1,5 @@
 defaultPlatforms:
 - linux/amd64
 - linux/arm64
+builds:
+  - ldflags: -X github.com/dnstapir/edm/pkg/runner.version={{.Env.GITHUB_SHA}}
