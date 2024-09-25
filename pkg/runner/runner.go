@@ -1345,9 +1345,9 @@ func (edm *dnstapMinimiser) clientIPIsIgnored(dt *dnstap.Dnstap) bool {
 	return false
 }
 
-// runMinimiser reads frames from the inputChannel, doing any modifications and
-// then passes them on to a dnstap.Output. To gracefully stop
-// runMinimiser() you can call edm.stop().
+// runMinimiser is the main loop of the program, it reads dnstap from
+// inputChannel and decides what further processing to do.
+// To gracefully stop runMinimiser() you can call edm.stop().
 func (edm *dnstapMinimiser) runMinimiser(minimiserID int, wg *sync.WaitGroup, seenQnameLRU *lru.Cache[string, struct{}], pdb *pebble.DB, disableSessionFiles bool, debugDnstapFile *os.File, labelLimit int, wkdTracker *wellKnownDomainsTracker) {
 	defer wg.Done()
 
