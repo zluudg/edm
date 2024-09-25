@@ -556,7 +556,6 @@ func (edm *dnstapMinimiser) setIgnoredClientIPs(ignoredClientsFileName string) e
 		numCIDRs++
 	}
 	if err := scanner.Err(); err != nil {
-		fmt.Fprintln(os.Stderr, "reading standard input:", err)
 		return fmt.Errorf("setIgnoredClientIPs: error reading from '%s': %w", ignoredClientsFileName, err)
 	}
 
