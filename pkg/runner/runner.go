@@ -521,6 +521,10 @@ func (edm *dnstapMinimiser) setupMQTT() {
 
 func (edm *dnstapMinimiser) setIgnoredClientIPs(ignoredClientsFileName string) error {
 	if ignoredClientsFileName == "" {
+		edm.ignoredClientsIPSetMutex.Lock()
+		edm.ignoredClientsIPSet = nil
+		edm.ignoredClientCIDRsParsed = 0
+		edm.ignoredClientsIPSetMutex.Unlock()
 		return nil
 	}
 
@@ -537,7 +541,7 @@ func (edm *dnstapMinimiser) setIgnoredClientIPs(ignoredClientsFileName string) e
 
 	var b netipx.IPSetBuilder
 
-	numCIDRs := 0
+	var numCIDRs uint64
 	scanner := bufio.NewScanner(fh)
 	for scanner.Scan() {
 		if scanner.Text() == "" || strings.HasPrefix(scanner.Text(), "#") {
@@ -563,11 +567,19 @@ func (edm *dnstapMinimiser) setIgnoredClientIPs(ignoredClientsFileName string) e
 
 	edm.ignoredClientsIPSetMutex.Lock()
 	edm.ignoredClientsIPSet = ipset
+	edm.ignoredClientCIDRsParsed = numCIDRs
 	edm.ignoredClientsIPSetMutex.Unlock()
 
 	edm.log.Info("setIgnoredClientIPs: DNS client ignore list has been loaded", "filename", ignoredClientsFileName, "num_cidrs", numCIDRs)
 
 	return nil
+}
+
+func (edm *dnstapMinimiser) getNumIgnoredClientCIDRs() uint64 {
+	edm.ignoredClientsIPSetMutex.RLock()
+	defer edm.ignoredClientsIPSetMutex.RUnlock()
+
+	return edm.ignoredClientCIDRsParsed
 }
 
 func (edm *dnstapMinimiser) fsEventWatcher() {
@@ -957,6 +969,7 @@ type dnstapMinimiser struct {
 	autopahoCancel           context.CancelFunc
 	autopahoWg               sync.WaitGroup
 	ignoredClientsIPSet      *netipx.IPSet
+	ignoredClientCIDRsParsed uint64
 	ignoredClientsIPSetMutex sync.RWMutex // Mutex for protecting updates to ignored client IPs at runtime
 	fsWatcher                *fsnotify.Watcher
 	fsWatcherFuncs           map[string]func(string) error
@@ -1320,6 +1333,8 @@ func (edm *dnstapMinimiser) qnameSeen(msg *dns.Msg, seenQnameLRU *lru.Cache[stri
 }
 
 func (edm *dnstapMinimiser) clientIPIsIgnored(dt *dnstap.Dnstap) bool {
+	// edm.ignoredClientsIPSet can be modified at runtime so wrap everything
+	// in a RO lock
 	edm.ignoredClientsIPSetMutex.RLock()
 	defer edm.ignoredClientsIPSetMutex.RUnlock()
 

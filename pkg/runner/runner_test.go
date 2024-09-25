@@ -189,6 +189,406 @@ func TestWKD(t *testing.T) {
 
 }
 
+func TestIgnoredClientIPsValid(t *testing.T) {
+	discardLogger := slog.NewTextHandler(io.Discard, nil)
+	logger := slog.New(discardLogger)
+
+	cryptopanSalt := "aabbccddeeffgghh"
+	cryptopanCacheSize := 10
+
+	edm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false, false)
+	if err != nil {
+		t.Fatalf("unable to setup edm: %s", err)
+	}
+
+	testdataFile1 := "testdata/ignored-client-ips.valid1"
+	testdataFile2 := "testdata/ignored-client-ips.valid2"
+
+	err = edm.setIgnoredClientIPs(testdataFile1)
+	if err != nil {
+		t.Fatalf("unable to parse testdata: %s", err)
+	}
+	numCIDRs := edm.getNumIgnoredClientCIDRs()
+
+	// Magic value counted by hand
+	var expectedNumCIDRs uint64 = 6
+
+	if numCIDRs != expectedNumCIDRs {
+		t.Fatalf("unexpected number of CIDRs parsed from '%s': have: %d, want: %d", testdataFile1, numCIDRs, expectedNumCIDRs)
+	}
+
+	var ipLookupTests = []struct {
+		name    string
+		ip      netip.Addr
+		ignored bool
+	}{
+		{
+			name:    "ignored IPv4 /32 #1",
+			ip:      netip.MustParseAddr("127.0.0.1"),
+			ignored: true,
+		},
+		{
+			name:    "ignored IPv4 /32 #2",
+			ip:      netip.MustParseAddr("127.0.0.2"),
+			ignored: true,
+		},
+		{
+			name:    "ignored IPv4 /8 #1",
+			ip:      netip.MustParseAddr("10.10.8.5"),
+			ignored: true,
+		},
+		{
+			name:    "ignored IPv6 /128 #1",
+			ip:      netip.MustParseAddr("::1"),
+			ignored: true,
+		},
+		{
+			name:    "ignored IPv6 /128 #2",
+			ip:      netip.MustParseAddr("::2"),
+			ignored: true,
+		},
+		{
+			name:    "ignored IPv6 /32 #2",
+			ip:      netip.MustParseAddr("2001:db8:0010:0011::10"),
+			ignored: true,
+		},
+		{
+			name:    "monitored IPv4 #1",
+			ip:      netip.MustParseAddr("127.0.0.3"),
+			ignored: false,
+		},
+		{
+			name:    "monitored IPv4 #2",
+			ip:      netip.MustParseAddr("198.51.100.10"),
+			ignored: false,
+		},
+		{
+			name:    "monitored IPv6 #1",
+			ip:      netip.MustParseAddr("::3"),
+			ignored: false,
+		},
+		{
+			name:    "monitored IPv6 #2",
+			ip:      netip.MustParseAddr("3fff:0010:0011::10"),
+			ignored: false,
+		},
+	}
+
+	for _, test := range ipLookupTests {
+		dt := &dnstap.Dnstap{
+			Message: &dnstap.Message{
+				QueryAddress: test.ip.AsSlice(),
+			},
+		}
+		ignored := edm.clientIPIsIgnored(dt)
+
+		if ignored != test.ignored {
+			t.Fatalf("%s: (lookup for '%s'), have: %t, want: %t", test.name, test.ip, ignored, test.ignored)
+		}
+	}
+
+	// Load a new file and make sure older ignored IPs are no longer ignored
+	err = edm.setIgnoredClientIPs(testdataFile2)
+	if err != nil {
+		t.Fatalf("unable to parse testdata: %s", err)
+	}
+	numCIDRs = edm.getNumIgnoredClientCIDRs()
+
+	if numCIDRs != expectedNumCIDRs {
+		t.Fatalf("unexpected number of CIDRs parsed from '%s': have: %d, want: %d", testdataFile2, numCIDRs, expectedNumCIDRs)
+	}
+
+	var ipLookupTests2 = []struct {
+		name    string
+		ip      netip.Addr
+		ignored bool
+	}{
+		{
+			name:    "ignored IPv4 /32 #1",
+			ip:      netip.MustParseAddr("127.0.0.1"),
+			ignored: false,
+		},
+		{
+			name:    "ignored IPv4 /32 #2",
+			ip:      netip.MustParseAddr("127.0.0.2"),
+			ignored: false,
+		},
+		{
+			name:    "ignored IPv4 /8 #1",
+			ip:      netip.MustParseAddr("10.10.8.5"),
+			ignored: false,
+		},
+		{
+			name:    "ignored IPv6 /128 #1",
+			ip:      netip.MustParseAddr("::1"),
+			ignored: false,
+		},
+		{
+			name:    "ignored IPv6 /128 #2",
+			ip:      netip.MustParseAddr("::2"),
+			ignored: false,
+		},
+		{
+			name:    "ignored IPv6 /32 #2",
+			ip:      netip.MustParseAddr("2001:db8:0010:0011::10"),
+			ignored: false,
+		},
+		{
+			name:    "monitored IPv4 #1",
+			ip:      netip.MustParseAddr("127.0.0.3"),
+			ignored: true,
+		},
+		{
+			name:    "monitored IPv4 #2",
+			ip:      netip.MustParseAddr("198.51.100.10"),
+			ignored: true,
+		},
+		{
+			name:    "monitored IPv6 #1",
+			ip:      netip.MustParseAddr("::3"),
+			ignored: true,
+		},
+		{
+			name:    "monitored IPv6 #1",
+			ip:      netip.MustParseAddr("::4"),
+			ignored: true,
+		},
+		{
+			name:    "monitored IPv6 #2",
+			ip:      netip.MustParseAddr("3fff:0010:0011::10"),
+			ignored: true,
+		},
+	}
+
+	for _, test := range ipLookupTests2 {
+		dt := &dnstap.Dnstap{
+			Message: &dnstap.Message{
+				QueryAddress: test.ip.AsSlice(),
+			},
+		}
+		ignored := edm.clientIPIsIgnored(dt)
+
+		if ignored != test.ignored {
+			t.Fatalf("%s: (lookup for '%s'), have: %t, want: %t", test.name, test.ip, ignored, test.ignored)
+		}
+	}
+}
+
+func TestIgnoredClientIPsEmptyLinesComments(t *testing.T) {
+	discardLogger := slog.NewTextHandler(io.Discard, nil)
+	logger := slog.New(discardLogger)
+
+	cryptopanSalt := "aabbccddeeffgghh"
+	cryptopanCacheSize := 10
+
+	edm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false, false)
+	if err != nil {
+		t.Fatalf("unable to setup edm: %s", err)
+	}
+
+	testdataFile := "testdata/ignored-client-ips.empty-lines-and-comments"
+
+	err = edm.setIgnoredClientIPs(testdataFile)
+	if err != nil {
+		t.Fatalf("unable to parse testdata: %s", err)
+	}
+	numCIDRs := edm.getNumIgnoredClientCIDRs()
+
+	// Magic value counted by hand
+	var expectedNumCIDRs uint64 = 2
+
+	if numCIDRs != expectedNumCIDRs {
+		t.Fatalf("unexpected number of CIDRs parsed from '%s': have: %d, want: %d", testdataFile, numCIDRs, expectedNumCIDRs)
+	}
+
+	var ipLookupTests = []struct {
+		name    string
+		ip      netip.Addr
+		ignored bool
+	}{
+		{
+			name:    "commented out IPv4 /32",
+			ip:      netip.MustParseAddr("127.0.0.1"),
+			ignored: false,
+		},
+		{
+			name:    "commented out IPv6 /128",
+			ip:      netip.MustParseAddr("::2"),
+			ignored: false,
+		},
+		{
+			name:    "ignored IPv4 /32",
+			ip:      netip.MustParseAddr("127.0.0.2"),
+			ignored: true,
+		},
+		{
+			name:    "ignored IPv6 /128",
+			ip:      netip.MustParseAddr("::1"),
+			ignored: true,
+		},
+	}
+
+	for _, test := range ipLookupTests {
+		dt := &dnstap.Dnstap{
+			Message: &dnstap.Message{
+				QueryAddress: test.ip.AsSlice(),
+			},
+		}
+		ignored := edm.clientIPIsIgnored(dt)
+
+		if ignored != test.ignored {
+			t.Fatalf("%s: (lookup for '%s'), have: %t, want: %t", test.name, test.ip, ignored, test.ignored)
+		}
+	}
+}
+
+func TestIgnoredClientIPsEmpty(t *testing.T) {
+	discardLogger := slog.NewTextHandler(io.Discard, nil)
+	logger := slog.New(discardLogger)
+
+	cryptopanSalt := "aabbccddeeffgghh"
+	cryptopanCacheSize := 10
+
+	edm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false, false)
+	if err != nil {
+		t.Fatalf("unable to setup edm: %s", err)
+	}
+
+	// To make sure reading an empty file resets stuff as expected first read in a file with content
+	err = edm.setIgnoredClientIPs("testdata/ignored-client-ips.valid1")
+	if err != nil {
+		t.Fatalf("unable to parse testdata: %s", err)
+	}
+
+	testdataFile := "testdata/ignored-client-ips.empty"
+
+	err = edm.setIgnoredClientIPs(testdataFile)
+	if err != nil {
+		t.Fatalf("unable to parse testdata: %s", err)
+	}
+	numCIDRs := edm.getNumIgnoredClientCIDRs()
+
+	// Magic value counted by hand
+	var expectedNumCIDRs uint64
+
+	if numCIDRs != expectedNumCIDRs {
+		t.Fatalf("unexpected number of CIDRs parsed from '%s': have: %d, want: %d", testdataFile, numCIDRs, expectedNumCIDRs)
+	}
+
+	var ipLookupTests = []struct {
+		name    string
+		ip      netip.Addr
+		ignored bool
+	}{
+		{
+			name:    "monitored IPv4 #1",
+			ip:      netip.MustParseAddr("127.0.0.1"),
+			ignored: false,
+		},
+		{
+			name:    "monitored IPv4 #2",
+			ip:      netip.MustParseAddr("127.0.0.2"),
+			ignored: false,
+		},
+		{
+			name:    "monitored IPv6 #1",
+			ip:      netip.MustParseAddr("::1"),
+			ignored: false,
+		},
+		{
+			name:    "monitored IPv6 #2",
+			ip:      netip.MustParseAddr("::2"),
+			ignored: false,
+		},
+	}
+
+	for _, test := range ipLookupTests {
+		dt := &dnstap.Dnstap{
+			Message: &dnstap.Message{
+				QueryAddress: test.ip.AsSlice(),
+			},
+		}
+		ignored := edm.clientIPIsIgnored(dt)
+
+		if ignored != test.ignored {
+			t.Fatalf("%s: (lookup for '%s'), have: %t, want: %t", test.name, test.ip, ignored, test.ignored)
+		}
+	}
+}
+
+func TestIgnoredClientIPsUnset(t *testing.T) {
+	discardLogger := slog.NewTextHandler(io.Discard, nil)
+	logger := slog.New(discardLogger)
+
+	cryptopanSalt := "aabbccddeeffgghh"
+	cryptopanCacheSize := 10
+
+	edm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false, false)
+	if err != nil {
+		t.Fatalf("unable to setup edm: %s", err)
+	}
+
+	// To make sure unsetting the filename used for ignored client IPs resets stuff as expected first read in a file with content
+	err = edm.setIgnoredClientIPs("testdata/ignored-client-ips.valid1")
+	if err != nil {
+		t.Fatalf("unable to parse testdata: %s", err)
+	}
+
+	// Now run the function with an empty filename
+	err = edm.setIgnoredClientIPs("")
+	if err != nil {
+		t.Fatalf("unable to parse testdata: %s", err)
+	}
+	numCIDRs := edm.getNumIgnoredClientCIDRs()
+
+	// Magic value counted by hand
+	var expectedNumCIDRs uint64
+
+	if numCIDRs != expectedNumCIDRs {
+		t.Fatalf("unexpected number of CIDRs parsed from '%s': have: %d, want: %d", "", numCIDRs, expectedNumCIDRs)
+	}
+
+	var ipLookupTests = []struct {
+		name    string
+		ip      netip.Addr
+		ignored bool
+	}{
+		{
+			name:    "monitored IPv4 #1",
+			ip:      netip.MustParseAddr("127.0.0.1"),
+			ignored: false,
+		},
+		{
+			name:    "monitored IPv4 #2",
+			ip:      netip.MustParseAddr("127.0.0.2"),
+			ignored: false,
+		},
+		{
+			name:    "monitored IPv6 #1",
+			ip:      netip.MustParseAddr("::1"),
+			ignored: false,
+		},
+		{
+			name:    "monitored IPv6 #2",
+			ip:      netip.MustParseAddr("::2"),
+			ignored: false,
+		},
+	}
+
+	for _, test := range ipLookupTests {
+		dt := &dnstap.Dnstap{
+			Message: &dnstap.Message{
+				QueryAddress: test.ip.AsSlice(),
+			},
+		}
+		ignored := edm.clientIPIsIgnored(dt)
+
+		if ignored != test.ignored {
+			t.Fatalf("%s: (lookup for '%s'), have: %t, want: %t", test.name, test.ip, ignored, test.ignored)
+		}
+	}
+}
+
 func TestSetHistogramLabels(t *testing.T) {
 	// The reason the labels are "backwards" is because we define "label0"
 	// in the struct as the rightmost DNS label, e.g. "com", "net" etc.
