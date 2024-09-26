@@ -31,12 +31,12 @@ unzip top10milliondomains.csv.zip
 tapir-cli dawg --standalone compile --format csv --src top10milliondomains.csv --dawg well-known-domains.dawg
 edm run --input-unix /tmp/edm/input.sock --data-dir /tmp/edm/data --config edm.toml --well-known-domains well-known-domains.dawg --disable-mqtt --disable-histogram-sender
 ```
-
 Since all communication with Core is disabled this is helpful for creating some
-local parquet files to look around in. For inspecting the content you can use
-e.g. [DuckDB](https://duckdb.org) like so:
+local parquet files to look around in.
 
-### Inspecting the local files
+### Inspecting the resulting files
+For inspecting the content you can use e.g. [DuckDB](https://duckdb.org) like
+so:
 * For summarised histogram data
 ```text
 duckdb -c 'select * from "/tmp/edm/data/parquet/histograms/outbox/dns_histogram-2024-09-26T18-14-00Z_2024-09-26T18-15-00Z.parquet"'
