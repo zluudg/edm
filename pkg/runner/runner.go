@@ -1422,10 +1422,6 @@ minimiserLoop:
 				continue
 			}
 
-			if edm.debug {
-				edm.log.Debug("dnstapMinimiser.runMinimiser: modifying dnstap message", "minimiser_id", minimiserID)
-			}
-
 			// Keep around the unpseudonymised client IP for HLL
 			// data, be careful with logging or otherwise handling
 			// this IP as it is sensitive.
@@ -2083,6 +2079,10 @@ func certPoolFromFile(fileName string) (*x509.CertPool, error) {
 // Pseudonymise IP address fields in a dnstap message
 func (edm *dnstapMinimiser) pseudonymiseDnstap(dt *dnstap.Dnstap) {
 	var err error
+
+	if edm.debug {
+		edm.log.Debug("pseudonymiseDnstap: modifying dnstap message")
+	}
 
 	// Lock is used here because the cryptopan instance can get updated at runtime.
 	edm.cryptopanMutex.RLock()
