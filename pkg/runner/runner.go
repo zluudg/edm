@@ -1397,17 +1397,6 @@ minimiserLoop:
 				break minimiserLoop
 			}
 
-			isQuery := strings.HasSuffix(dnstap.Message_Type_name[int32(*dt.Message.Type)], "_QUERY")
-
-			// For now we only care about response type dnstap packets
-			if isQuery {
-				continue
-			}
-
-			if edm.clientIPIsIgnored(dt) {
-				continue
-			}
-
 			// Keep in mind that this outputs the unmodified dnstap
 			// data, so it contains sensitive information.
 			if debugDnstapFile != nil {
@@ -1420,6 +1409,17 @@ minimiserLoop:
 						edm.log.Error("unable to write to dnstap debug file", "error", err, "filename", debugDnstapFile.Name(), "minimiser_id", minimiserID)
 					}
 				}
+			}
+
+			isQuery := strings.HasSuffix(dnstap.Message_Type_name[int32(*dt.Message.Type)], "_QUERY")
+
+			// For now we only care about response type dnstap packets
+			if isQuery {
+				continue
+			}
+
+			if edm.clientIPIsIgnored(dt) {
+				continue
 			}
 
 			if edm.debug {
