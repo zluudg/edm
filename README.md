@@ -77,5 +77,6 @@ For creating a container image you will need to install
 [ko](https://github.com/ko-build/ko) and once this is done you can build a
 container that is pushed to a local Docker daemon like so:
 ```
-GITHUB_SHA=$(git log -1 --pretty=%H) KO_DOCKER_REPO=ko.local ko build --bare
+GITHUB_SHA=$(git log -1 --pretty=%H) ko build -L -B
 ```
+You now have a `ko.local/edm:latest` available locally.
