@@ -1408,6 +1408,8 @@ minimiserLoop:
 				continue
 			}
 
+			// Keep in mind that this outputs the unmodified dnstap
+			// data, so it contains sensitive information.
 			if debugDnstapFile != nil {
 				out, ok := dnstap.JSONFormat(dt)
 				if !ok {
