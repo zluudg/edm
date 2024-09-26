@@ -35,11 +35,13 @@ edm run --input-unix /tmp/edm/input.sock --data-dir /tmp/edm/data --config edm.t
 Since all communication with Core is disabled this is helpful for creating some
 local parquet files to look around in. For inspecting the content you can use
 e.g. [DuckDB](https://duckdb.org) like so:
-### For summarised histogram data
+
+### Inspecting the local files
+* For summarised histogram data
 ```text
 duckdb -c 'select * from "/tmp/edm/data/parquet/histograms/outbox/dns_histogram-2024-09-26T18-14-00Z_2024-09-26T18-15-00Z.parquet"'
 ```
-### For pseudonymised session (full message) data
+* For pseudonymised session (full message) data
 ```text
 duckdb -c 'select * from "/tmp/edm/data/parquet/sessions/dns_session_block-2024-09-26T18-18-00Z_2024-09-26T18-19-00Z.parquet"'
 ```
@@ -47,7 +49,7 @@ duckdb -c 'select * from "/tmp/edm/data/parquet/sessions/dns_session_block-2024-
 Next to the parquet directory you will also see a directory called "pebble".
 This is where `edm` keeps its key-value store which is used to tell if a
 query name has been seen before or not. The key-value store being used is
-[pebble](https://github.com/cockroachdb/pebble)
+[pebble](https://github.com/cockroachdb/pebble).
 
 ## Development
 
