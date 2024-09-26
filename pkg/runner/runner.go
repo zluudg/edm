@@ -1449,7 +1449,7 @@ minimiserLoop:
 			}
 
 			if _, ok := dns.IsDomainName(msg.Question[0].Name); !ok {
-				edm.log.Error("unable to parse question name, skipping parsing", "minimiser_id", minimiserID)
+				edm.log.Error("question name is invalid, skipping parsing", "minimiser_id", minimiserID)
 				continue
 			}
 
