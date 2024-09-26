@@ -54,7 +54,6 @@ query name has been seen before or not. The key-value store being used is
 ## Development
 
 ### Formatting and linting
-
 When working with this code at least the following tools are expected to be
 run at the top level directory prior to commiting:
 
@@ -64,3 +63,19 @@ run at the top level directory prior to commiting:
 * `gosec ./...` (see [gosec](https://github.com/securego/gosec))
 * `golangci-lint run` (see [golangci-lint](https://golangci-lint.run))
 * `go test -race ./...`
+
+### Building
+#### Binary
+The most simple way of getting the binary while including a version string
+based on the current git commit is this:
+```
+go build -ldflags="-X main.version=$(git log -1 --pretty=%H)"
+```
+
+#### Container
+For creating a container image you will need to install
+[ko](https://github.com/ko-build/ko) and once this is done you can build a
+container that is pushed to a local Docker daemon like so:
+```
+GITHUB_SHA=$(git log -1 --pretty=%H) KO_DOCKER_REPO=ko.local ko build --bare
+```
