@@ -1438,8 +1438,13 @@ minimiserLoop:
 
 			// For cases where we were unable to unpack the DNS message we
 			// skip parsing.
-			if msg == nil || len(msg.Question) == 0 {
-				edm.log.Error("unable to parse dnstap message, or no question section, skipping parsing", "minimiser_id", minimiserID)
+			if msg == nil {
+				edm.log.Error("unable to parse dnstap message, skipping parsing", "minimiser_id", minimiserID)
+				continue
+			}
+
+			if len(msg.Question) == 0 {
+				edm.log.Error("no question section in dnstap message, skipping parsing", "minimiser_id", minimiserID)
 				continue
 			}
 
