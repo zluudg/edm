@@ -17,8 +17,8 @@ Core via MQTT messages.
 ## Usage
 Running `edm` requires the creation of a TOML config file for holding the
 crypto-PAn secret used for pseudonymisation as well as a
-`well-known-domains.dawg` file which can be created using
-<https://github.com/dnstapir/tapir-cli>
+`well-known-domains.dawg` file which can be created using `tapir-cli` from
+<https://github.com/dnstapir/cli>
 
 ### Steps for a basic local-only setup
 A basic setup where `edm` will listen on a unix socket for DNSTAP data and
