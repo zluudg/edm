@@ -519,6 +519,51 @@ func (edm *dnstapMinimiser) setupMQTT() {
 	go edm.runAutoPaho(autopahoCm, viper.GetString("mqtt-topic"), mqttJWK)
 }
 
+func (edm *dnstapMinimiser) setIgnoredQuestionNames(ignoredQuestionsFileName string) error {
+	if ignoredQuestionsFileName == "" {
+		edm.ignoredQuestionsMutex.Lock()
+		if edm.ignoredQuestions != nil {
+			err := edm.ignoredQuestions.Close()
+			if err != nil {
+				edm.log.Error("setIgnoredQuestionNames: failed closing edm.ignoredQuestions for unset filename", "error", err)
+			}
+			edm.ignoredQuestions = nil
+		}
+		edm.ignoredQuestionsMutex.Unlock()
+		return nil
+	}
+
+	dawgFinder, _, err := loadDawgFile(ignoredQuestionsFileName)
+	if err != nil {
+		return fmt.Errorf("setIgnoredQuestionsNames: unable to load dawg file '%s': %w", ignoredQuestionsFileName, err)
+	}
+
+	// We only use the dawg file if there exists at least one name
+	// in it. Since the file can be empty we must also be prepared to set
+	// our edm field to nil so we do not keep using an old list.
+	edm.ignoredQuestionsMutex.Lock()
+	if edm.ignoredQuestions != nil {
+		err = edm.ignoredQuestions.Close()
+		if err != nil {
+			edm.log.Error("setIgnoredQuestionNames: failed closing edm.ignoredQuestions", "error", err)
+		}
+	}
+	if dawgFinder.NumAdded() > 0 {
+		edm.ignoredQuestions = dawgFinder
+	} else {
+		edm.ignoredQuestions = nil
+	}
+	edm.ignoredQuestionsMutex.Unlock()
+
+	if dawgFinder.NumAdded() > 0 {
+		edm.log.Info("setIgnoredQuestionNames: DNS question ignore list loaded", "filename", ignoredQuestionsFileName, "num_names", dawgFinder.NumAdded())
+	} else {
+		edm.log.Info("setIgnoredQuestionNames: DNS question ignore list empty, no question names will be ignored", "filename", ignoredQuestionsFileName, "num_names", dawgFinder.NumAdded())
+	}
+
+	return nil
+}
+
 func (edm *dnstapMinimiser) setIgnoredClientIPs(ignoredClientsFileName string) error {
 	if ignoredClientsFileName == "" {
 		edm.ignoredClientsIPSetMutex.Lock()
@@ -575,9 +620,9 @@ func (edm *dnstapMinimiser) setIgnoredClientIPs(ignoredClientsFileName string) e
 	edm.ignoredClientsIPSetMutex.Unlock()
 
 	if ipset != nil {
-		edm.log.Info("setIgnoredClientIPs: DNS client ignore list has been loaded", "filename", ignoredClientsFileName, "num_cidrs", numCIDRs)
+		edm.log.Info("setIgnoredClientIPs: DNS client ignore list loaded", "filename", ignoredClientsFileName, "num_cidrs", numCIDRs)
 	} else {
-		edm.log.Info("setIgnoredClientIPs: DNS client ignore list is empty, no clients will be ignored", "filename", ignoredClientsFileName, "num_cidrs", numCIDRs)
+		edm.log.Info("setIgnoredClientIPs: DNS client ignore list empty, no clients will be ignored", "filename", ignoredClientsFileName, "num_cidrs", numCIDRs)
 	}
 
 	return nil
@@ -725,6 +770,18 @@ func Run(version string) {
 	err = edm.registerFSWatcher(viper.GetString("ignored-client-ip-file"), edm.setIgnoredClientIPs)
 	if err != nil {
 		logger.Error("unable to register fsWatcher callback", "filename", viper.GetString("ignored-client-ip-file"), "error", err)
+		os.Exit(1)
+	}
+
+	err = edm.setIgnoredQuestionNames(viper.GetString("ignored-question-names-file"))
+	if err != nil {
+		logger.Error("unable to configure ignored client IPs", "error", err)
+		os.Exit(1)
+	}
+
+	err = edm.registerFSWatcher(viper.GetString("ignored-question-names-file"), edm.setIgnoredQuestionNames)
+	if err != nil {
+		logger.Error("unable to register fsWatcher callback", "filename", viper.GetString("ignored-question-names-file"), "error", err)
 		os.Exit(1)
 	}
 
@@ -973,6 +1030,7 @@ type dnstapMinimiser struct {
 	newQnameChannelLen       prometheus.Gauge
 	clientIPIgnored          prometheus.Counter
 	clientIPIgnoredError     prometheus.Counter
+	questionNameIgnored      prometheus.Counter
 	ctx                      context.Context
 	stop                     context.CancelFunc // call this to gracefully stop runMinimiser()
 	debug                    bool               // if we should print debug messages during operation
@@ -990,6 +1048,8 @@ type dnstapMinimiser struct {
 	ignoredClientsIPSet      *netipx.IPSet
 	ignoredClientCIDRsParsed uint64
 	ignoredClientsIPSetMutex sync.RWMutex // Mutex for protecting updates to ignored client IPs at runtime
+	ignoredQuestions         dawg.Finder
+	ignoredQuestionsMutex    sync.RWMutex
 	fsWatcher                *fsnotify.Watcher
 	fsWatcherFuncs           map[string]func(string) error
 	fsWatcherMutex           sync.RWMutex
@@ -1076,6 +1136,11 @@ func newDnstapMinimiser(logger *slog.Logger, cryptopanKey string, cryptopanSalt 
 		Help: "The total number of times we have ignored a dnstap packet because of client IP error, should always be 0",
 	})
 
+	edm.questionNameIgnored = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
+		Name: "edm_ignored_question_name_total",
+		Help: "The total number of times we have ignored a dnstap packet because of the name in the question section",
+	})
+
 	edm.promReg = promReg
 	// Size 32 matches unexported "const outputChannelSize = 32" in
 	// https://github.com/dnstap/golang-dnstap/blob/master/dnstap.go
@@ -1141,16 +1206,16 @@ func newWellKnownDomainsTracker(dawgFinder dawg.Finder, dawgModTime time.Time) (
 
 // Try to find a domain name string match in DAWG data and return the index as
 // well as if it was found based on a suffix string or not.
-func (wkd *wellKnownDomainsTracker) dawgIndex(msg *dns.Msg) (int, bool) {
+func getDawgIndex(dawgFinder dawg.Finder, name string) (int, bool) {
 	// Try exact match first
-	dawgIndex := wkd.dawgFinder.IndexOf(msg.Question[0].Name)
+	dawgIndex := dawgFinder.IndexOf(name)
 
 	if dawgIndex == dawgNotFound {
 		// Next try to look up suffix matches, so for the name
 		// "www.example.com." we will check for the strings
 		// ".example.com." and ".com.".
-		for index, end := dns.NextLabel(msg.Question[0].Name, 0); !end; index, end = dns.NextLabel(msg.Question[0].Name, index) {
-			dawgIndex = wkd.dawgFinder.IndexOf(msg.Question[0].Name[index-1:])
+		for index, end := dns.NextLabel(name, 0); !end; index, end = dns.NextLabel(name, index) {
+			dawgIndex = dawgFinder.IndexOf(name[index-1:])
 			if dawgIndex != dawgNotFound {
 				return dawgIndex, true
 			}
@@ -1179,7 +1244,7 @@ func (wkd *wellKnownDomainsTracker) lookup(msg *dns.Msg) (int, bool, time.Time) 
 	wkd.mutex.RLock()
 	defer wkd.mutex.RUnlock()
 
-	dawgIndex, suffixMatch := wkd.dawgIndex(msg)
+	dawgIndex, suffixMatch := getDawgIndex(wkd.dawgFinder, msg.Question[0].Name)
 
 	return dawgIndex, suffixMatch, wkd.dawgModTime
 }
@@ -1379,6 +1444,27 @@ func (edm *dnstapMinimiser) clientIPIsIgnored(dt *dnstap.Dnstap) bool {
 	return false
 }
 
+func (edm *dnstapMinimiser) questionIsIgnored(msg *dns.Msg) bool {
+	// edm.ignoredQuestions can be modified at runtime so wrap everything
+	// in a RO lock
+	edm.ignoredQuestionsMutex.RLock()
+	defer edm.ignoredQuestionsMutex.RUnlock()
+
+	if edm.ignoredQuestions != nil {
+		// While uncommon, if there happens to be multiple questions in
+		// the packet we will consider the message ignored if any of them matches the
+		// ignore list.
+		for _, question := range msg.Question {
+			dawgIndex, _ := getDawgIndex(edm.ignoredQuestions, question.Name)
+			if dawgIndex != dawgNotFound {
+				edm.questionNameIgnored.Inc()
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // runMinimiser is the main loop of the program, it reads dnstap from
 // inputChannel and decides what further processing to do.
 // To gracefully stop runMinimiser() you can call edm.stop().
@@ -1448,8 +1534,14 @@ minimiserLoop:
 				continue
 			}
 
-			if _, ok := dns.IsDomainName(msg.Question[0].Name); !ok {
-				edm.log.Error("question name is invalid, skipping parsing", "minimiser_id", minimiserID)
+			for i, question := range msg.Question {
+				if _, ok := dns.IsDomainName(question.Name); !ok {
+					edm.log.Error("question name is invalid, skipping parsing", "minimiser_id", minimiserID, "question_index", i)
+					continue
+				}
+			}
+
+			if edm.questionIsIgnored(msg) {
 				continue
 			}
 

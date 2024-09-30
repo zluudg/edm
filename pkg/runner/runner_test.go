@@ -111,7 +111,13 @@ func TestWKD(t *testing.T) {
 			suffixMatch: true,
 		},
 		{
-			name:        "no match for for suffix entry",
+			name:        "found more nested suffix match",
+			domain:      "example.www.example.net.",
+			found:       true,
+			suffixMatch: true,
+		},
+		{
+			name:        "no match for suffix entry",
 			domain:      "example.net.",
 			found:       false,
 			suffixMatch: false,
@@ -126,7 +132,7 @@ func TestWKD(t *testing.T) {
 	for _, test := range wkdDawgIndexTests {
 		m := new(dns.Msg)
 		m.SetQuestion(test.domain, dns.TypeA)
-		i, suffixMatch := wkd.dawgIndex(m)
+		i, suffixMatch := getDawgIndex(wkd.dawgFinder, m.Question[0].Name)
 
 		if test.found && i == dawgNotFound {
 			t.Fatalf("%s: expected match %s, but was not found", test.name, test.domain)
@@ -454,25 +460,39 @@ func TestIgnoredClientIPsEmpty(t *testing.T) {
 		t.Fatalf("unable to setup edm: %s", err)
 	}
 
+	testdataFile := "testdata/ignored-client-ips.valid1"
 	// To make sure reading an empty file resets stuff as expected first read in a file with content
-	err = edm.setIgnoredClientIPs("testdata/ignored-client-ips.valid1")
-	if err != nil {
-		t.Fatalf("unable to parse testdata: %s", err)
-	}
-
-	testdataFile := "testdata/ignored-client-ips.empty"
-
 	err = edm.setIgnoredClientIPs(testdataFile)
 	if err != nil {
 		t.Fatalf("unable to parse testdata: %s", err)
 	}
-	numCIDRs := edm.getNumIgnoredClientCIDRs()
+
+	// Magic value counted by hand
+	expectedValidNumCIDRs := 2
+
+	// Make sure we actually got anything loaded from the file with content
+	if edm.ignoredClientsIPSet == nil {
+		t.Fatalf("edm.ignoredClientsIPSet parsed from '%s' should not be nil", testdataFile)
+	}
+	if edm.getNumIgnoredClientCIDRs() < 1 {
+		t.Fatalf("unexpected number of CIDRs parsed from '%s': have: %d, want: %d", testdataFile, edm.getNumIgnoredClientCIDRs(), expectedValidNumCIDRs)
+	}
+
+	testdataFile = "testdata/ignored-client-ips.empty"
+	err = edm.setIgnoredClientIPs(testdataFile)
+	if err != nil {
+		t.Fatalf("unable to parse testdata: %s", err)
+	}
 
 	// Magic value counted by hand
 	var expectedNumCIDRs uint64
 
-	if numCIDRs != expectedNumCIDRs {
-		t.Fatalf("unexpected number of CIDRs parsed from '%s': have: %d, want: %d", testdataFile, numCIDRs, expectedNumCIDRs)
+	if edm.getNumIgnoredClientCIDRs() != expectedNumCIDRs {
+		t.Fatalf("unexpected number of CIDRs parsed from '%s': have: %d, want: %d", testdataFile, edm.getNumIgnoredClientCIDRs(), expectedNumCIDRs)
+	}
+
+	if edm.ignoredClientsIPSet != nil {
+		t.Fatalf("edm.ignoredClientsIPSet should be nil, have: %#v", edm.ignoredClientsIPSet)
 	}
 
 	var ipLookupTests = []struct {
@@ -635,6 +655,306 @@ func TestIgnoredClientIPsInvalidClient(t *testing.T) {
 	ignored = edm.clientIPIsIgnored(dt)
 	if ignored != false {
 		t.Fatalf("invalid QueryAddress:, have: %t, want: %t", ignored, false)
+	}
+}
+
+func TestIgnoredQuestionNamesValid(t *testing.T) {
+	discardLogger := slog.NewTextHandler(io.Discard, nil)
+	logger := slog.New(discardLogger)
+
+	cryptopanSalt := "aabbccddeeffgghh"
+	cryptopanCacheSize := 10
+
+	edm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false, false)
+	if err != nil {
+		t.Fatalf("unable to setup edm: %s", err)
+	}
+
+	testdataFile1 := "testdata/ignored-question-names.valid1.dawg"
+	testdataFile2 := "testdata/ignored-question-names.valid2.dawg"
+
+	// Magic value counted by hand
+	expectedNumNames := 2
+
+	err = edm.setIgnoredQuestionNames(testdataFile1)
+	if err != nil {
+		t.Fatalf("unable to parse testdata: %s", err)
+	}
+
+	if edm.ignoredQuestions.NumAdded() != expectedNumNames {
+		t.Fatalf("unexpected number of names parsed from '%s': have: %d, want: %d", testdataFile1, edm.ignoredQuestions.NumAdded(), expectedNumNames)
+	}
+
+	var questionLookupTests = []struct {
+		name     string
+		question string
+		ignored  bool
+	}{
+		{
+			name:     "exact match found",
+			question: "example.com.",
+			ignored:  true,
+		},
+		{
+			name:     "exact match not found",
+			question: "www.example.com.",
+			ignored:  false,
+		},
+		{
+			name:     "suffix match",
+			question: "www.example.net.",
+			ignored:  true,
+		},
+		{
+			name:     "more nested suffix match",
+			question: "example.www.example.net.",
+			ignored:  true,
+		},
+		{
+			name:     "suffix not matched",
+			question: "example.net.",
+			ignored:  false,
+		},
+	}
+
+	for _, test := range questionLookupTests {
+		m := new(dns.Msg)
+		m.SetQuestion(test.question, dns.TypeA)
+		ignored := edm.questionIsIgnored(m)
+
+		if ignored != test.ignored {
+			t.Fatalf("%s: (lookup for '%s'), have: %t, want: %t", test.name, test.question, ignored, test.ignored)
+		}
+	}
+
+	// Load a new file and make sure older ignored IPs are no longer ignored
+	err = edm.setIgnoredQuestionNames(testdataFile2)
+	if err != nil {
+		t.Fatalf("unable to parse testdata: %s", err)
+	}
+
+	if edm.ignoredQuestions.NumAdded() != expectedNumNames {
+		t.Fatalf("unexpected number of names parsed from '%s': have: %d, want: %d", testdataFile2, edm.ignoredQuestions.NumAdded(), expectedNumNames)
+	}
+
+	var questionLookupTests2 = []struct {
+		name     string
+		question string
+		ignored  bool
+	}{
+		{
+			name:     "exact match no longer found",
+			question: "example.com.",
+			ignored:  false,
+		},
+		{
+			name:     "suffix match no longer found",
+			question: "www.example.net.",
+			ignored:  false,
+		},
+		{
+			name:     "more nested suffix match no longer found",
+			question: "example.www.example.net.",
+			ignored:  false,
+		},
+		{
+			name:     "exact match found",
+			question: "example.org.",
+			ignored:  true,
+		},
+		{
+			name:     "exact match not found",
+			question: "www.example.org.",
+			ignored:  false,
+		},
+		{
+			name:     "suffix match",
+			question: "www.example.edu.",
+			ignored:  true,
+		},
+		{
+			name:     "more nested suffix match",
+			question: "example.www.example.edu.",
+			ignored:  true,
+		},
+		{
+			name:     "suffix not matched",
+			question: "example.edu.",
+			ignored:  false,
+		},
+	}
+
+	for _, test := range questionLookupTests2 {
+		m := new(dns.Msg)
+		m.SetQuestion(test.question, dns.TypeA)
+		ignored := edm.questionIsIgnored(m)
+
+		if ignored != test.ignored {
+			t.Fatalf("%s: (lookup for '%s'), have: %t, want: %t", test.name, test.question, ignored, test.ignored)
+		}
+	}
+}
+
+func TestIgnoredQuestionNamesEmpty(t *testing.T) {
+	discardLogger := slog.NewTextHandler(io.Discard, nil)
+	logger := slog.New(discardLogger)
+
+	cryptopanSalt := "aabbccddeeffgghh"
+	cryptopanCacheSize := 10
+
+	edm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false, false)
+	if err != nil {
+		t.Fatalf("unable to setup edm: %s", err)
+	}
+
+	// To make sure reading an empty file resets stuff as expected first read in a file with content
+	testdataFile := "testdata/ignored-question-names.valid1.dawg"
+	err = edm.setIgnoredQuestionNames(testdataFile)
+	if err != nil {
+		t.Fatalf("unable to parse testdata: %s", err)
+	}
+
+	// Magic value counted by hand
+	expectedNumNames := 2
+
+	if edm.ignoredQuestions.NumAdded() != expectedNumNames {
+		t.Fatalf("unexpected number of names parsed from '%s': have: %d, want: %d", testdataFile, edm.ignoredQuestions.NumAdded(), expectedNumNames)
+	}
+
+	testdataFile = "testdata/ignored-question-names.empty.dawg"
+	err = edm.setIgnoredQuestionNames(testdataFile)
+	if err != nil {
+		t.Fatalf("unable to parse testdata: %s", err)
+	}
+
+	if edm.ignoredQuestions != nil {
+		t.Fatalf("edm.ignoredQuestions should be nil: have: %#v", edm.ignoredQuestions)
+	}
+
+	// Try to look for things that was present in the initial valid data
+	// that was loaded, none of it should be considered ignored now.
+	var questionLookupTests = []struct {
+		name     string
+		question string
+		ignored  bool
+	}{
+		{
+			name:     "previous exact match should not be ignored",
+			question: "example.com.",
+			ignored:  false,
+		},
+		{
+			name:     "previous exact match miss should still be ignored",
+			question: "www.example.com.",
+			ignored:  false,
+		},
+		{
+			name:     "previous suffix match should not be ignored",
+			question: "www.example.net.",
+			ignored:  false,
+		},
+		{
+			name:     "previous more nested suffix match should not be ignored",
+			question: "example.www.example.net.",
+			ignored:  false,
+		},
+		{
+			name:     "previous suffix match misss still ignored",
+			question: "example.net.",
+			ignored:  false,
+		},
+	}
+
+	for _, test := range questionLookupTests {
+		m := new(dns.Msg)
+		m.SetQuestion(test.question, dns.TypeA)
+		ignored := edm.questionIsIgnored(m)
+
+		if ignored != test.ignored {
+			t.Fatalf("%s: (lookup for '%s'), have: %t, want: %t", test.name, test.question, ignored, test.ignored)
+		}
+	}
+}
+
+func TestIgnoredQuestionNamesUnset(t *testing.T) {
+	discardLogger := slog.NewTextHandler(io.Discard, nil)
+	logger := slog.New(discardLogger)
+
+	cryptopanSalt := "aabbccddeeffgghh"
+	cryptopanCacheSize := 10
+
+	edm, err := newDnstapMinimiser(logger, "key1", cryptopanSalt, cryptopanCacheSize, false, false, false)
+	if err != nil {
+		t.Fatalf("unable to setup edm: %s", err)
+	}
+
+	// To make sure unsetting the filename used for ignored question names
+	// resets stuff as expected first read in a file with content
+	testdataFile := "testdata/ignored-question-names.valid1.dawg"
+	err = edm.setIgnoredQuestionNames(testdataFile)
+	if err != nil {
+		t.Fatalf("unable to parse testdata: %s", err)
+	}
+
+	// Magic value counted by hand
+	expectedNumNames := 2
+
+	if edm.ignoredQuestions.NumAdded() != expectedNumNames {
+		t.Fatalf("unexpected number of names parsed from '%s': have: %d, want: %d", testdataFile, edm.ignoredQuestions.NumAdded(), expectedNumNames)
+	}
+
+	// Now set an empty filename
+	err = edm.setIgnoredQuestionNames("")
+	if err != nil {
+		t.Fatalf("unable to parse testdata: %s", err)
+	}
+
+	if edm.ignoredQuestions != nil {
+		t.Fatalf("edm.ignoredQuestions should be nil: have: %#v", edm.ignoredQuestions)
+	}
+
+	// Try to look for things that was present in the initial valid data
+	// that was loaded, none of it should be considered ignored now.
+	var questionLookupTests = []struct {
+		name     string
+		question string
+		ignored  bool
+	}{
+		{
+			name:     "previous exact match should not be ignored",
+			question: "example.com.",
+			ignored:  false,
+		},
+		{
+			name:     "previous exact match miss should still be ignored",
+			question: "www.example.com.",
+			ignored:  false,
+		},
+		{
+			name:     "previous suffix match should not be ignored",
+			question: "www.example.net.",
+			ignored:  false,
+		},
+		{
+			name:     "previous more nested suffix match should not be ignored",
+			question: "example.www.example.net.",
+			ignored:  false,
+		},
+		{
+			name:     "previous suffix match misss still ignored",
+			question: "example.net.",
+			ignored:  false,
+		},
+	}
+
+	for _, test := range questionLookupTests {
+		m := new(dns.Msg)
+		m.SetQuestion(test.question, dns.TypeA)
+		ignored := edm.questionIsIgnored(m)
+
+		if ignored != test.ignored {
+			t.Fatalf("%s: (lookup for '%s'), have: %t, want: %t", test.name, test.question, ignored, test.ignored)
+		}
 	}
 }
 
