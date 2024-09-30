@@ -761,15 +761,15 @@ func Run(version string) {
 	defer edm.stop()
 	defer edm.fsWatcher.Close()
 
-	err = edm.setIgnoredClientIPs(viper.GetString("ignored-client-ip-file"))
+	err = edm.setIgnoredClientIPs(viper.GetString("ignored-client-ips-file"))
 	if err != nil {
 		logger.Error("unable to configure ignored client IPs", "error", err)
 		os.Exit(1)
 	}
 
-	err = edm.registerFSWatcher(viper.GetString("ignored-client-ip-file"), edm.setIgnoredClientIPs)
+	err = edm.registerFSWatcher(viper.GetString("ignored-client-ips-file"), edm.setIgnoredClientIPs)
 	if err != nil {
-		logger.Error("unable to register fsWatcher callback", "filename", viper.GetString("ignored-client-ip-file"), "error", err)
+		logger.Error("unable to register fsWatcher callback", "filename", viper.GetString("ignored-client-ips-file"), "error", err)
 		os.Exit(1)
 	}
 
