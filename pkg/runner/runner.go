@@ -718,25 +718,7 @@ func (edm *dnstapMinimiser) registerFSWatcher(filename string, callback func(str
 	return nil
 }
 
-func Run(version string) {
-
-	defaultHostname := "edm-hostname-unknown"
-	hostname, err := os.Hostname()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "unable to get hostname, using '%s'", defaultHostname)
-		hostname = defaultHostname
-	}
-
-	// Logger used for all output
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	logger = logger.With("service", "edm")
-	logger = logger.With("hostname", hostname)
-	logger = logger.With("go_version", runtime.Version())
-	logger = logger.With("version", version)
-
-	// This makes any calls to the standard "log" package to use slog as
-	// well
-	slog.SetDefault(logger)
+func Run(logger *slog.Logger) {
 
 	if viper.GetBool("debug-enable-blockprofiling") {
 		logger.Info("enabling blocking profiling")

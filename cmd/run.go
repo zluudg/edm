@@ -13,7 +13,7 @@ var runCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Run edm in dnstap capture mode",
 	Run: func(_ *cobra.Command, _ []string) {
-		runner.Run(edmVersion)
+		runner.Run(edmLogger)
 	},
 }
 

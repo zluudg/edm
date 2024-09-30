@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -9,7 +9,7 @@ import (
 )
 
 var cfgFile string
-var edmVersion string
+var edmLogger *slog.Logger
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -24,9 +24,9 @@ outputting minimised output data.`,
 
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
-func Execute(version string) {
-	// Set global variable so it can be used from run.go
-	edmVersion = version
+func Execute(logger *slog.Logger) {
+	// Set global variables so it can be used from run.go
+	edmLogger = logger
 	err := rootCmd.Execute()
 	if err != nil {
 		os.Exit(1)
@@ -67,7 +67,7 @@ func initConfig() {
 
 	// If a config file is found, read it in.
 	if err := viper.ReadInConfig(); err == nil {
-		fmt.Fprintln(os.Stderr, "Using config file:", viper.ConfigFileUsed())
+		edmLogger.Info("using config file", "filename", viper.ConfigFileUsed())
 	}
 
 	// Make it so we can detect changes to the cryptopan secret in the config
