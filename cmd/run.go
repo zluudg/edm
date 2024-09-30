@@ -32,6 +32,7 @@ func init() {
 	runCmd.Flags().Bool("debug", false, "print debug logging during operation")
 	runCmd.Flags().Bool("disable-session-files", false, "do not write out session parquet files")
 	runCmd.Flags().Bool("disable-histogram-sender", false, "do not check for histogram files to upload to core")
+	runCmd.Flags().Bool("disable-mqtt", false, "disable MQTT message sending")
 
 	runCmd.Flags().String("input-unix", "", "create unix socket for reading dnstap (e.g. /var/lib/unbound/dnstap.sock)")
 	runCmd.Flags().String("input-tcp", "", "create TCP socket for reading dnstap (e.g. '127.0.0.1:53535')")
@@ -53,7 +54,6 @@ func init() {
 	runCmd.Flags().String("ignored-question-names-file", "", "a DAWG file containing question section names that will be ignored")
 	runCmd.Flags().String("data-dir", "/var/lib/edm", "directory where output data is written")
 	runCmd.Flags().Int("minimiser-workers", 1, "how many minimiser workers to start (0 means same as GOMAXPROCS)")
-	runCmd.Flags().Bool("disable-mqtt", false, "disable MQTT message sending")
 	runCmd.Flags().String("mqtt-signing-key-file", "edm-mqtt-signer-key.pem", "ECSDSA key used for signing MQTT messages")
 	runCmd.Flags().String("mqtt-signing-key-id", "key1", "ID (used as `kid` in JWS) when signing MQTT messages")
 	runCmd.Flags().String("mqtt-client-key-file", "edm-mqtt-client-key.pem", "ECSDSA client key used for authenticating to MQTT bus")
