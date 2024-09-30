@@ -997,44 +997,44 @@ func Run(logger *slog.Logger) {
 }
 
 type dnstapMinimiser struct {
-	inputChannel             chan []byte          // the channel expected to be passed to dnstap ReadInto()
-	log                      *slog.Logger         // any information logging is sent here
-	cryptopan                *cryptopan.Cryptopan // used for pseudonymising IP addresses
-	cryptopanCache           *lru.Cache[netip.Addr, netip.Addr]
-	cryptopanMutex           sync.RWMutex // Mutex for protecting updates cryptopan at runtime
-	promReg                  *prometheus.Registry
-	cryptopanCacheHit        prometheus.Counter
-	cryptopanCacheEvicted    prometheus.Counter
-	dnstapProcessed          prometheus.Counter
-	newQnameQueued           prometheus.Counter
-	newQnameDiscarded        prometheus.Counter
-	seenQnameLRUEvicted      prometheus.Counter
-	newQnameChannelLen       prometheus.Gauge
-	clientIPIgnored          prometheus.Counter
-	clientIPIgnoredError     prometheus.Counter
-	questionNameIgnored      prometheus.Counter
-	ctx                      context.Context
-	stop                     context.CancelFunc // call this to gracefully stop runMinimiser()
-	debug                    bool               // if we should print debug messages during operation
-	sessionWriterCh          chan *prevSessions
-	histogramWriterCh        chan *wellKnownDomainsData
-	newQnamePublisherCh      chan *protocols.EventsMqttMessageNewQnameJson
-	sessionCollectorCh       chan *sessionData
-	histogramSenderDisabled  bool
-	aggregSender             aggregateSender
-	mqttDisabled             bool
-	mqttPubCh                chan []byte
-	autopahoCtx              context.Context
-	autopahoCancel           context.CancelFunc
-	autopahoWg               sync.WaitGroup
-	ignoredClientsIPSet      *netipx.IPSet
-	ignoredClientCIDRsParsed uint64
-	ignoredClientsIPSetMutex sync.RWMutex // Mutex for protecting updates to ignored client IPs at runtime
-	ignoredQuestions         dawg.Finder
-	ignoredQuestionsMutex    sync.RWMutex
-	fsWatcher                *fsnotify.Watcher
-	fsWatcherFuncs           map[string]func(string) error
-	fsWatcherMutex           sync.RWMutex
+	inputChannel              chan []byte          // the channel expected to be passed to dnstap ReadInto()
+	log                       *slog.Logger         // any information logging is sent here
+	cryptopan                 *cryptopan.Cryptopan // used for pseudonymising IP addresses
+	cryptopanCache            *lru.Cache[netip.Addr, netip.Addr]
+	cryptopanMutex            sync.RWMutex // Mutex for protecting updates cryptopan at runtime
+	promReg                   *prometheus.Registry
+	promCryptopanCacheHit     prometheus.Counter
+	promCryptopanCacheEvicted prometheus.Counter
+	promDnstapProcessed       prometheus.Counter
+	promNewQnameQueued        prometheus.Counter
+	promNewQnameDiscarded     prometheus.Counter
+	promSeenQnameLRUEvicted   prometheus.Counter
+	promNewQnameChannelLen    prometheus.Gauge
+	promClientIPIgnored       prometheus.Counter
+	promClientIPIgnoredError  prometheus.Counter
+	promQuestionNameIgnored   prometheus.Counter
+	ctx                       context.Context
+	stop                      context.CancelFunc // call this to gracefully stop runMinimiser()
+	debug                     bool               // if we should print debug messages during operation
+	sessionWriterCh           chan *prevSessions
+	histogramWriterCh         chan *wellKnownDomainsData
+	newQnamePublisherCh       chan *protocols.EventsMqttMessageNewQnameJson
+	sessionCollectorCh        chan *sessionData
+	histogramSenderDisabled   bool
+	aggregSender              aggregateSender
+	mqttDisabled              bool
+	mqttPubCh                 chan []byte
+	autopahoCtx               context.Context
+	autopahoCancel            context.CancelFunc
+	autopahoWg                sync.WaitGroup
+	ignoredClientsIPSet       *netipx.IPSet
+	ignoredClientCIDRsParsed  uint64
+	ignoredClientsIPSetMutex  sync.RWMutex // Mutex for protecting updates to ignored client IPs at runtime
+	ignoredQuestions          dawg.Finder
+	ignoredQuestionsMutex     sync.RWMutex
+	fsWatcher                 *fsnotify.Watcher
+	fsWatcherFuncs            map[string]func(string) error
+	fsWatcherMutex            sync.RWMutex
 }
 
 func createCryptopan(key string, salt string) (*cryptopan.Cryptopan, error) {
@@ -1073,52 +1073,52 @@ func newDnstapMinimiser(logger *slog.Logger, cryptopanKey string, cryptopanSalt 
 	promReg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	promReg.MustRegister(collectors.NewGoCollector())
 
-	edm.cryptopanCacheHit = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
+	edm.promCryptopanCacheHit = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
 		Name: "edm_cryptopan_lru_hit_total",
 		Help: "The total number of times we got a hit in the cryptopan address LRU cache",
 	})
 
-	edm.cryptopanCacheEvicted = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
+	edm.promCryptopanCacheEvicted = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
 		Name: "edm_cryptopan_lru_evicted_total",
 		Help: "The total number of times something was evicted from the cryptopan address LRU cache",
 	})
 
-	edm.dnstapProcessed = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
+	edm.promDnstapProcessed = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
 		Name: "edm_processed_dnstap_total",
 		Help: "The total number of processed dnstap packets",
 	})
 
-	edm.newQnameQueued = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
+	edm.promNewQnameQueued = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
 		Name: "edm_new_qname_queued_total",
 		Help: "The total number of queued new_qname events",
 	})
 
-	edm.newQnameDiscarded = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
+	edm.promNewQnameDiscarded = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
 		Name: "edm_new_qname_discarded_total",
 		Help: "The total number of discarded new_qname events",
 	})
 
-	edm.seenQnameLRUEvicted = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
+	edm.promSeenQnameLRUEvicted = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
 		Name: "edm_seen_qname_lru_evicted_total",
 		Help: "The total number of times something was evicted from the new_qname LRU cache",
 	})
 
-	edm.newQnameChannelLen = promauto.With(promReg).NewGauge(prometheus.GaugeOpts{
+	edm.promNewQnameChannelLen = promauto.With(promReg).NewGauge(prometheus.GaugeOpts{
 		Name: "edm_new_qname_ch_len",
 		Help: "The number of new_qname events in the channel buffer",
 	})
 
-	edm.clientIPIgnored = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
+	edm.promClientIPIgnored = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
 		Name: "edm_ignored_client_ip_total",
 		Help: "The total number of times we have ignored a dnstap packet because of client IP",
 	})
 
-	edm.clientIPIgnoredError = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
+	edm.promClientIPIgnoredError = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
 		Name: "edm_ignored_client_ip_error_total",
 		Help: "The total number of times we have ignored a dnstap packet because of client IP error, should always be 0",
 	})
 
-	edm.questionNameIgnored = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
+	edm.promQuestionNameIgnored = promauto.With(promReg).NewCounter(prometheus.CounterOpts{
 		Name: "edm_ignored_question_name_total",
 		Help: "The total number of times we have ignored a dnstap packet because of the name in the question section",
 	})
@@ -1372,7 +1372,7 @@ func (edm *dnstapMinimiser) qnameSeen(msg *dns.Msg, seenQnameLRU *lru.Cache[stri
 	// Add it to the LRU
 	evicted := seenQnameLRU.Add(msg.Question[0].Name, struct{}{})
 	if evicted {
-		edm.seenQnameLRUEvicted.Inc()
+		edm.promSeenQnameLRUEvicted.Inc()
 	}
 
 	// It was not in the LRU cache, does it exist in pebble (on disk)?
@@ -1414,12 +1414,12 @@ func (edm *dnstapMinimiser) clientIPIsIgnored(dt *dnstap.Dnstap) bool {
 			// such packets as well while making
 			// noise in logs so it can be investigated
 			edm.log.Error("unable to parse QueryAddress for ignore-checking, ignoring dnstap packet to be safe, please investigate")
-			edm.clientIPIgnoredError.Inc()
+			edm.promClientIPIgnoredError.Inc()
 			return true
 		}
 
 		if edm.ignoredClientsIPSet.Contains(clientIP) {
-			edm.clientIPIgnored.Inc()
+			edm.promClientIPIgnored.Inc()
 			return true
 		}
 	}
@@ -1439,7 +1439,7 @@ func (edm *dnstapMinimiser) questionIsIgnored(msg *dns.Msg) bool {
 		for _, question := range msg.Question {
 			dawgIndex, _ := getDawgIndex(edm.ignoredQuestions, question.Name)
 			if dawgIndex != dawgNotFound {
-				edm.questionNameIgnored.Inc()
+				edm.promQuestionNameIgnored.Inc()
 				return true
 			}
 		}
@@ -1459,7 +1459,7 @@ minimiserLoop:
 	for {
 		select {
 		case frame := <-edm.inputChannel:
-			edm.dnstapProcessed.Inc()
+			edm.promDnstapProcessed.Inc()
 			if err := proto.Unmarshal(frame, dt); err != nil {
 				edm.log.Error("dnstapMinimiser.runMinimiser: proto.Unmarshal() failed, returning", "error", err, "minimiser_id", minimiserID)
 				break minimiserLoop
@@ -1544,10 +1544,10 @@ minimiserLoop:
 
 					select {
 					case edm.newQnamePublisherCh <- &newQname:
-						edm.newQnameQueued.Inc()
+						edm.promNewQnameQueued.Inc()
 					default:
 						// If the publisher channel is full we skip creating an event.
-						edm.newQnameDiscarded.Inc()
+						edm.promNewQnameDiscarded.Inc()
 					}
 				}
 			}
@@ -1566,7 +1566,7 @@ minimiserLoop:
 func (edm *dnstapMinimiser) monitorChannelLen() {
 
 	for {
-		edm.newQnameChannelLen.Set(float64(len(edm.newQnamePublisherCh)))
+		edm.promNewQnameChannelLen.Set(float64(len(edm.newQnamePublisherCh)))
 		time.Sleep(time.Second * 1)
 	}
 }
@@ -2198,7 +2198,7 @@ func (edm *dnstapMinimiser) pseudonymiseIP(ipBytes []byte) ([]byte, error) {
 	}
 
 	if cacheHit {
-		edm.cryptopanCacheHit.Inc()
+		edm.promCryptopanCacheHit.Inc()
 	} else {
 		// Not in cache or cache disabled, calculate the pseudonymised IP
 		pseudonymisedAddr, ok = netip.AddrFromSlice(edm.cryptopan.Anonymize(addr.AsSlice()))
@@ -2218,7 +2218,7 @@ func (edm *dnstapMinimiser) pseudonymiseIP(ipBytes []byte) ([]byte, error) {
 		if edm.cryptopanCache != nil {
 			evicted := edm.cryptopanCache.Add(addr, pseudonymisedAddr)
 			if evicted {
-				edm.cryptopanCacheEvicted.Inc()
+				edm.promCryptopanCacheEvicted.Inc()
 			}
 		}
 	}
