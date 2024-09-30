@@ -29,6 +29,7 @@ func init() {
 	// Cobra supports local flags which will only run when this command
 	// is called directly, e.g.:
 	// runCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+
 	runCmd.Flags().Bool("debug", false, "print debug logging during operation")
 	runCmd.Flags().Bool("disable-session-files", false, "do not write out session parquet files")
 	runCmd.Flags().Bool("disable-histogram-sender", false, "do not check for histogram files to upload to core")
@@ -64,7 +65,6 @@ func init() {
 	runCmd.Flags().String("mqtt-ca-file", "", "CA cert used for validating MQTT TLS connection, defaults to using OS CA certs")
 
 	runCmd.Flags().Int("mqtt-keepalive", 30, "Keepalive interval for MQTT connection")
-	//runCmd.Flags().Bool("mqtt-clean-start", true, "Control if a new MQTT session is created when connecting")
 	runCmd.Flags().Int("qname-seen-entries", 10000000, "Number of 'seen' qnames stored in LRU cache, need to be changed based on RAM")
 	runCmd.Flags().Int("cryptopan-address-entries", 10000000, "Number of cryptopan pseudonymised addresses stored in LRU cache, 0 disables the cache, need to be changed based on RAM")
 	runCmd.Flags().Int("newqname-buffer", 1000, "Number of slots in new_qname publisher channel, if this is filled up we skip new_qname events")
