@@ -29,7 +29,7 @@ echo 'cryptopan-key = "mysecret"' > edm.toml
 curl -O https://www.domcop.com/files/top/top10milliondomains.csv.zip
 unzip top10milliondomains.csv.zip
 tapir-cli dawg --standalone compile --format csv --src top10milliondomains.csv --dawg well-known-domains.dawg
-edm run --input-unix /tmp/edm/input.sock --data-dir /tmp/edm/data --config edm.toml --well-known-domains well-known-domains.dawg --disable-mqtt --disable-histogram-sender
+edm run --input-unix /tmp/edm/input.sock --data-dir /tmp/edm/data --config edm.toml --well-known-domains-file well-known-domains.dawg --disable-mqtt --disable-histogram-sender
 ```
 Since all communication with Core is disabled this is helpful for creating some
 local parquet files to look around in.

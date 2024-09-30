@@ -48,7 +48,7 @@ func init() {
 	runCmd.Flags().String("cryptopan-key", "", "override the secret used for Crypto-PAn pseudonymization")
 
 	runCmd.Flags().String("cryptopan-key-salt", "edm-kdf-salt-val", "the salt used for key derivation")
-	runCmd.Flags().String("well-known-domains", "well-known-domains.dawg", "the DAWG file used for filtering well-known domains")
+	runCmd.Flags().String("well-known-domains-file", "well-known-domains.dawg", "the DAWG file used for filtering well-known domains")
 	runCmd.Flags().String("ignored-client-ips-file", "", "file containing a newline separated list of IPv4/IPv6 CIDRs of DNS clients that will be ignored")
 	runCmd.Flags().String("ignored-question-names-file", "", "a DAWG file containing question section names that will be ignored")
 	runCmd.Flags().String("data-dir", "/var/lib/edm", "directory where output data is written")

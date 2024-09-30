@@ -928,7 +928,7 @@ func Run(version string) {
 	wg.Add(1)
 	go edm.diskCleaner(&wg, sentDir)
 
-	dawgFile := viper.GetString("well-known-domains")
+	dawgFile := viper.GetString("well-known-domains-file")
 
 	dawgFinder, dawgModTime, err := loadDawgFile(dawgFile)
 	if err != nil {
