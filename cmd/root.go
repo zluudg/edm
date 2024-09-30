@@ -40,7 +40,7 @@ func init() {
 	// Cobra supports persistent flags, which, if defined here,
 	// will be global for your application.
 
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file for sensitive information (default is $HOME/.edm.yaml)")
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config-file", "", "config file for sensitive information (default is $HOME/.edm.toml)")
 
 	// Cobra also supports local flags, which will only run
 	// when this action is called directly.
@@ -59,7 +59,7 @@ func initConfig() {
 
 		// Search config in home directory with name ".edm" (without extension).
 		viper.AddConfigPath(home)
-		viper.SetConfigType("yaml")
+		viper.SetConfigType("toml")
 		viper.SetConfigName(".edm")
 	}
 
