@@ -99,6 +99,12 @@ func TestWKD(t *testing.T) {
 			suffixMatch: false,
 		},
 		{
+			name:        "found exact match, case insensitive",
+			domain:      "eXample.com.",
+			found:       true,
+			suffixMatch: false,
+		},
+		{
 			name:        "missing exact match",
 			domain:      "www.example.com.",
 			found:       false,
@@ -111,8 +117,20 @@ func TestWKD(t *testing.T) {
 			suffixMatch: true,
 		},
 		{
+			name:        "found suffix match, case insensitive",
+			domain:      "wWw.eXample.net.",
+			found:       true,
+			suffixMatch: true,
+		},
+		{
 			name:        "found more nested suffix match",
 			domain:      "example.www.example.net.",
+			found:       true,
+			suffixMatch: true,
+		},
+		{
+			name:        "found more nested suffix match, case insensitive",
+			domain:      "eXample.www.example.net.",
 			found:       true,
 			suffixMatch: true,
 		},

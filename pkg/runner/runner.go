@@ -1189,6 +1189,9 @@ func newWellKnownDomainsTracker(dawgFinder dawg.Finder, dawgModTime time.Time) (
 // Try to find a domain name string match in DAWG data and return the index as
 // well as if it was found based on a suffix string or not.
 func getDawgIndex(dawgFinder dawg.Finder, name string) (int, bool) {
+	// Ignore capitalisation in labels
+	name = strings.ToLower(name)
+
 	// Try exact match first
 	dawgIndex := dawgFinder.IndexOf(name)
 
