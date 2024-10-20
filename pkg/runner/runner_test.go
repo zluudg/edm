@@ -714,6 +714,11 @@ func TestIgnoredQuestionNamesValid(t *testing.T) {
 			ignored:  true,
 		},
 		{
+			name:     "exact match found, case insensitive",
+			question: "eXample.com.",
+			ignored:  true,
+		},
+		{
 			name:     "exact match not found",
 			question: "www.example.com.",
 			ignored:  false,
@@ -724,8 +729,18 @@ func TestIgnoredQuestionNamesValid(t *testing.T) {
 			ignored:  true,
 		},
 		{
+			name:     "suffix match",
+			question: "wWw.example.net.",
+			ignored:  true,
+		},
+		{
 			name:     "more nested suffix match",
 			question: "example.www.example.net.",
+			ignored:  true,
+		},
+		{
+			name:     "more nested suffix match, case insensitive",
+			question: "eXample.www.example.net.",
 			ignored:  true,
 		},
 		{
