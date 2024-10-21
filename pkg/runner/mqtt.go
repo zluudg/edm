@@ -15,7 +15,6 @@ import (
 )
 
 func (edm *dnstapMinimiser) newAutoPahoClientConfig(caCertPool *x509.CertPool, server string, clientID string, clientCert tls.Certificate, mqttKeepAlive uint16) (autopaho.ClientConfig, error) {
-
 	u, err := url.Parse(server)
 	if err != nil {
 		return autopaho.ClientConfig{}, fmt.Errorf("newAutoPahoClientConfig: unable to parse URL: %w", err)
@@ -46,7 +45,6 @@ func (edm *dnstapMinimiser) newAutoPahoClientConfig(caCertPool *x509.CertPool, s
 	}
 
 	return cliCfg, nil
-
 }
 
 func (edm *dnstapMinimiser) runAutoPaho(cm *autopaho.ConnectionManager, topic string, mqttJWK jwk.Key) {

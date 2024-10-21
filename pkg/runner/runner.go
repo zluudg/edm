@@ -59,7 +59,6 @@ const dawgNotFound = -1
 type edmStatusBits uint64
 
 func (dsb *edmStatusBits) String() string {
-
 	if *dsb >= edmStatusMax {
 		return fmt.Sprintf("unknown flags in status: %b", *dsb)
 	}
@@ -275,7 +274,6 @@ func (edm *dnstapMinimiser) reverseLabelsBounded(labels []string, maxLen int) []
 
 			boundedReverseLabels = append(boundedReverseLabels, strings.Join(remainderLabels, "."))
 		}
-
 	}
 	return boundedReverseLabels
 }
@@ -344,7 +342,6 @@ func getCryptopanAESKey(key string, salt string) []byte {
 }
 
 func (edm *dnstapMinimiser) setCryptopan(key string, salt string, cacheEntries int) error {
-
 	var cpnCache *lru.Cache[netip.Addr, netip.Addr]
 	var err error
 
@@ -719,7 +716,6 @@ func (edm *dnstapMinimiser) registerFSWatcher(filename string, callback func(str
 }
 
 func Run(logger *slog.Logger) {
-
 	if viper.GetBool("debug-enable-blockprofiling") {
 		logger.Info("enabling blocking profiling")
 		runtime.SetBlockProfileRate(int(time.Millisecond))
@@ -936,7 +932,7 @@ func Run(logger *slog.Logger) {
 	if debugDnstapFilename != "" {
 		// Make gosec happy
 		debugDnstapFilename := filepath.Clean(debugDnstapFilename)
-		debugDnstapFile, err = os.OpenFile(debugDnstapFilename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+		debugDnstapFile, err = os.OpenFile(debugDnstapFilename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 		if err != nil {
 			edm.log.Error("unable to open debug dnstap file", "error", err.Error(), "filename", debugDnstapFilename)
 			os.Exit(1)
@@ -1038,7 +1034,6 @@ type dnstapMinimiser struct {
 }
 
 func createCryptopan(key string, salt string) (*cryptopan.Cryptopan, error) {
-
 	cryptopanKey := getCryptopanAESKey(key, salt)
 
 	cpn, err := cryptopan.New(cryptopanKey)
@@ -1172,7 +1167,6 @@ type wellKnownDomainsData struct {
 }
 
 func newWellKnownDomainsTracker(dawgFinder dawg.Finder, dawgModTime time.Time) (*wellKnownDomainsTracker, error) {
-
 	return &wellKnownDomainsTracker{
 		wellKnownDomainsData: wellKnownDomainsData{
 			m:          map[int]*histogramData{},
@@ -1225,7 +1219,6 @@ type wkdUpdate struct {
 }
 
 func (wkd *wellKnownDomainsTracker) lookup(msg *dns.Msg) (int, bool, time.Time) {
-
 	wkd.mutex.RLock()
 	defer wkd.mutex.RUnlock()
 
@@ -1266,7 +1259,6 @@ func (wkd *wellKnownDomainsTracker) updateRetryer(edm *dnstapMinimiser, wg *sync
 }
 
 func (wkd *wellKnownDomainsTracker) sendUpdate(ipBytes []byte, msg *dns.Msg, dawgIndex int, suffixMatch bool, dawgModTime time.Time) {
-
 	wu := wkdUpdate{
 		dawgIndex:   dawgIndex,
 		suffixMatch: suffixMatch,
@@ -1319,7 +1311,6 @@ func (wkd *wellKnownDomainsTracker) sendUpdate(ipBytes []byte, msg *dns.Msg, daw
 }
 
 func (wkd *wellKnownDomainsTracker) rotateTracker(edm *dnstapMinimiser, dawgFile string, rotationTime time.Time) (*wellKnownDomainsData, error) {
-
 	dawgFileChanged := false
 	var dawgFinder dawg.Finder
 
@@ -1567,7 +1558,6 @@ minimiserLoop:
 }
 
 func (edm *dnstapMinimiser) monitorChannelLen() {
-
 	for {
 		edm.promNewQnameChannelLen.Set(float64(len(edm.newQnamePublisherCh)))
 		time.Sleep(time.Second * 1)
@@ -1708,7 +1698,7 @@ func (edm *dnstapMinimiser) renameFile(src string, dst string) error {
 			// If the destionation directory does not exist we will
 			// need to create it and then retry the Rename() in the
 			// next iteration of the loop.
-			err = os.MkdirAll(dstDir, 0750)
+			err = os.MkdirAll(dstDir, 0o750)
 			if err != nil {
 				return fmt.Errorf("renameFile: unable to create destination dir: %s: %w", dstDir, err)
 			}
@@ -1739,7 +1729,7 @@ func (edm *dnstapMinimiser) createFile(dst string) (*os.File, error) {
 			// If the destionation directory does not exist we will
 			// need to create it and then retry the file Create()
 			// the next iteration of the loop.
-			err = os.MkdirAll(dstDir, 0750)
+			err = os.MkdirAll(dstDir, 0o750)
 			if err != nil {
 				return nil, fmt.Errorf("createFile: unable to create destination dir: %s: %w", dstDir, err)
 			}
@@ -2025,7 +2015,6 @@ func getStartTimeFromRotationTime(rotationTime time.Time) time.Time {
 }
 
 func (edm *dnstapMinimiser) writeHistogramParquet(prevWellKnownDomainsData *wellKnownDomainsData, labelLimit int, outboxDir string) error {
-
 	if prevWellKnownDomainsData.dawgIsRotated {
 		defer func() {
 			err := prevWellKnownDomainsData.dawgFinder.Close()

@@ -68,7 +68,6 @@ func BenchmarkSetHistogramLabels(b *testing.B) {
 }
 
 func TestWKD(t *testing.T) {
-
 	domainList := []string{
 		"example.com.",  // exact match
 		".example.net.", // suffix match
@@ -86,7 +85,7 @@ func TestWKD(t *testing.T) {
 
 	dFinder := dBuilder.Finish()
 
-	var wkdDawgIndexTests = []struct {
+	wkdDawgIndexTests := []struct {
 		name        string
 		domain      string
 		found       bool
@@ -171,7 +170,7 @@ func TestWKD(t *testing.T) {
 		t.Fatalf("unable to set HLL defaults: %s", err)
 	}
 
-	var wkdLookupTests = []struct {
+	wkdLookupTests := []struct {
 		name   string
 		domain string
 		known  bool
@@ -210,7 +209,6 @@ func TestWKD(t *testing.T) {
 			t.Fatalf("%s: unexpected known status, have: %t, want: %t", test.name, known, test.known)
 		}
 	}
-
 }
 
 func TestIgnoredClientIPsValid(t *testing.T) {
@@ -241,7 +239,7 @@ func TestIgnoredClientIPsValid(t *testing.T) {
 		t.Fatalf("unexpected number of CIDRs parsed from '%s': have: %d, want: %d", testdataFile1, numCIDRs, expectedNumCIDRs)
 	}
 
-	var ipLookupTests = []struct {
+	ipLookupTests := []struct {
 		name    string
 		ip      netip.Addr
 		ignored bool
@@ -322,7 +320,7 @@ func TestIgnoredClientIPsValid(t *testing.T) {
 		t.Fatalf("unexpected number of CIDRs parsed from '%s': have: %d, want: %d", testdataFile2, numCIDRs, expectedNumCIDRs)
 	}
 
-	var ipLookupTests2 = []struct {
+	ipLookupTests2 := []struct {
 		name    string
 		ip      netip.Addr
 		ignored bool
@@ -425,7 +423,7 @@ func TestIgnoredClientIPsEmptyLinesComments(t *testing.T) {
 		t.Fatalf("unexpected number of CIDRs parsed from '%s': have: %d, want: %d", testdataFile, numCIDRs, expectedNumCIDRs)
 	}
 
-	var ipLookupTests = []struct {
+	ipLookupTests := []struct {
 		name    string
 		ip      netip.Addr
 		ignored bool
@@ -513,7 +511,7 @@ func TestIgnoredClientIPsEmpty(t *testing.T) {
 		t.Fatalf("edm.ignoredClientsIPSet should be nil, have: %#v", edm.ignoredClientsIPSet)
 	}
 
-	var ipLookupTests = []struct {
+	ipLookupTests := []struct {
 		name    string
 		ip      netip.Addr
 		ignored bool
@@ -587,7 +585,7 @@ func TestIgnoredClientIPsUnset(t *testing.T) {
 		t.Fatalf("unexpected number of CIDRs parsed from '%s': have: %d, want: %d", "", numCIDRs, expectedNumCIDRs)
 	}
 
-	var ipLookupTests = []struct {
+	ipLookupTests := []struct {
 		name    string
 		ip      netip.Addr
 		ignored bool
@@ -703,7 +701,7 @@ func TestIgnoredQuestionNamesValid(t *testing.T) {
 		t.Fatalf("unexpected number of names parsed from '%s': have: %d, want: %d", testdataFile1, edm.ignoredQuestions.NumAdded(), expectedNumNames)
 	}
 
-	var questionLookupTests = []struct {
+	questionLookupTests := []struct {
 		name     string
 		question string
 		ignored  bool
@@ -770,7 +768,7 @@ func TestIgnoredQuestionNamesValid(t *testing.T) {
 		t.Fatalf("unexpected number of names parsed from '%s': have: %d, want: %d", testdataFile2, edm.ignoredQuestions.NumAdded(), expectedNumNames)
 	}
 
-	var questionLookupTests2 = []struct {
+	questionLookupTests2 := []struct {
 		name     string
 		question string
 		ignored  bool
@@ -866,7 +864,7 @@ func TestIgnoredQuestionNamesEmpty(t *testing.T) {
 
 	// Try to look for things that was present in the initial valid data
 	// that was loaded, none of it should be considered ignored now.
-	var questionLookupTests = []struct {
+	questionLookupTests := []struct {
 		name     string
 		question string
 		ignored  bool
@@ -948,7 +946,7 @@ func TestIgnoredQuestionNamesUnset(t *testing.T) {
 
 	// Try to look for things that was present in the initial valid data
 	// that was loaded, none of it should be considered ignored now.
-	var questionLookupTests = []struct {
+	questionLookupTests := []struct {
 		name     string
 		question string
 		ignored  bool
@@ -1132,7 +1130,6 @@ func TestSetSessionLabels(t *testing.T) {
 }
 
 func TestEDMStatusBitsMulti(t *testing.T) {
-
 	expectedString := "well-known-exact|well-known-wildcard"
 
 	dsb := new(edmStatusBits)
@@ -1145,7 +1142,6 @@ func TestEDMStatusBitsMulti(t *testing.T) {
 }
 
 func TestEDMStatusBitsSingle(t *testing.T) {
-
 	expectedString := "well-known-exact"
 
 	dsb := new(edmStatusBits)
@@ -1157,7 +1153,6 @@ func TestEDMStatusBitsSingle(t *testing.T) {
 }
 
 func TestEDMStatusBitsMax(t *testing.T) {
-
 	expectedString := "unknown flags in status"
 
 	dsb := new(edmStatusBits)
@@ -1169,7 +1164,6 @@ func TestEDMStatusBitsMax(t *testing.T) {
 }
 
 func TestEDMStatusBitsUnknown(t *testing.T) {
-
 	expectedString := "unknown flags in status"
 
 	dsb := new(edmStatusBits)
@@ -1181,7 +1175,6 @@ func TestEDMStatusBitsUnknown(t *testing.T) {
 }
 
 func TestEDMIPBytesToInt(t *testing.T) {
-
 	ipv4AddrString := "198.51.100.15"
 
 	ip4Addr, err := netip.ParseAddr(ipv4AddrString)
@@ -1209,7 +1202,6 @@ func TestEDMIPBytesToInt(t *testing.T) {
 }
 
 func TestEDMIP6BytesToInt(t *testing.T) {
-
 	ipv6AddrString := "2001:db8:1122:3344:5566:7788:99aa:bbcc"
 
 	ip6Addr, err := netip.ParseAddr(ipv6AddrString)
@@ -1558,7 +1550,6 @@ func TestPseudonymiseDnstap(t *testing.T) {
 	if uncachedPseudoRespAddr6 != expectedPseudoRespAddr6 {
 		t.Fatalf("uncached pseudonymised IPv6 resp address %s is not the expected address %s", uncachedPseudoRespAddr6, expectedPseudoRespAddr6)
 	}
-
 }
 
 func BenchmarkPseudonymiseDnstapWithCache4(b *testing.B) {
@@ -1718,7 +1709,6 @@ func BenchmarkMurmurSum64(b *testing.B) {
 }
 
 func TestCompareMurmurHashing(t *testing.T) {
-
 	murmur3Hasher := murmur3.New64()
 
 	ipAddrs := []string{"198.51.100.20", "198.51.100.21", "198.51.100.22"}

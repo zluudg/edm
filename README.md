@@ -71,7 +71,7 @@ go tool pprof http://127.0.0.1:2112/debug/pprof/profile?seconds=30
 When working with this code at least the following tools are expected to be
 run at the top level directory prior to commiting:
 
-* `go fmt ./...`
+* `gofumpt -l -w .` (see [gofumpt](https://github.com/mvdan/gofumpt))
 * `go vet ./...`
 * `staticcheck ./...` (see [staticcheck](https://staticcheck.io))
 * `gosec ./...` (see [gosec](https://github.com/securego/gosec))
