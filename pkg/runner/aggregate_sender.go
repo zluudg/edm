@@ -24,7 +24,6 @@ type aggregateSender struct {
 	aggrecURL         *url.URL
 	signingKey        *ecdsa.PrivateKey
 	caCertPool        *x509.CertPool
-	clientCert        tls.Certificate
 	signingHTTPClient *httpsign.Client
 }
 
@@ -57,7 +56,6 @@ func (edm *dnstapMinimiser) newAggregateSender(aggrecURL *url.URL, signingKeyNam
 		aggrecURL:         aggrecURL,
 		signingKey:        signingKey,
 		caCertPool:        caCertPool,
-		clientCert:        clientCert,
 		signingHTTPClient: client,
 	}
 }
