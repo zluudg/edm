@@ -14,7 +14,7 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jws"
 )
 
-func (edm *dnstapMinimiser) newAutoPahoClientConfig(caCertPool *x509.CertPool, server string, clientID string, clientCert tls.Certificate, mqttKeepAlive uint16) (autopaho.ClientConfig, error) {
+func (edm *dnstapMinimiser) newAutoPahoClientConfig(caCertPool *x509.CertPool, server string, clientID string, clientCertStore *certStore, mqttKeepAlive uint16) (autopaho.ClientConfig, error) {
 	u, err := url.Parse(server)
 	if err != nil {
 		return autopaho.ClientConfig{}, fmt.Errorf("newAutoPahoClientConfig: unable to parse URL: %w", err)
@@ -23,9 +23,9 @@ func (edm *dnstapMinimiser) newAutoPahoClientConfig(caCertPool *x509.CertPool, s
 	cliCfg := autopaho.ClientConfig{
 		ServerUrls: []*url.URL{u},
 		TlsCfg: &tls.Config{
-			RootCAs:      caCertPool,
-			Certificates: []tls.Certificate{clientCert},
-			MinVersion:   tls.VersionTLS13,
+			RootCAs:              caCertPool,
+			GetClientCertificate: clientCertStore.getClientCertficate,
+			MinVersion:           tls.VersionTLS13,
 		},
 		KeepAlive:      mqttKeepAlive,
 		OnConnectionUp: func(*autopaho.ConnectionManager, *paho.Connack) { edm.log.Info("mqtt connection up") },
