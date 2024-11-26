@@ -34,6 +34,7 @@ import (
 	dnstap "github.com/dnstap/golang-dnstap"
 	"github.com/dnstapir/edm/pkg/protocols"
 	"github.com/eclipse/paho.golang/autopaho"
+	"github.com/eclipse/paho.golang/autopaho/queue/file"
 	"github.com/fsnotify/fsnotify"
 	_ "github.com/grafana/pyroscope-go/godeltaprof/http/pprof" // revive linter: keep blank import close to where it is used for now.
 	lru "github.com/hashicorp/golang-lru/v2"
@@ -497,7 +498,24 @@ func (edm *dnstapMinimiser) setupMQTT(mqttClientCertStore *certStore) {
 		}
 	}
 
-	autopahoConfig, err := edm.newAutoPahoClientConfig(mqttCACertPool, viper.GetString("mqtt-server"), viper.GetString("mqtt-client-id"), mqttClientCertStore, uint16(viper.GetInt("mqtt-keepalive")))
+	var mqttFileQueue *file.Queue
+	if !viper.GetBool("disable-mqtt-filequeue") {
+		mqttQueueDir := filepath.Join(viper.GetString("data-dir"), "mqtt", "queue")
+
+		err = os.MkdirAll(mqttQueueDir, 0o750)
+		if err != nil {
+			edm.log.Error("unable to create MQTT queue dir", "error", err, "queue_dir", mqttQueueDir)
+			os.Exit(1)
+		}
+
+		mqttFileQueue, err = file.New(filepath.Join(viper.GetString("data-dir"), "mqtt", "queue"), "queue", ".msg")
+		if err != nil {
+			edm.log.Error("unable to init MQTT queue file based queue", "error", err)
+			os.Exit(1)
+		}
+	}
+
+	autopahoConfig, err := edm.newAutoPahoClientConfig(mqttCACertPool, viper.GetString("mqtt-server"), viper.GetString("mqtt-client-id"), mqttClientCertStore, uint16(viper.GetInt("mqtt-keepalive")), mqttFileQueue)
 	if err != nil {
 		edm.log.Error("unable to create autopaho config", "error", err)
 		os.Exit(1)
@@ -528,7 +546,7 @@ func (edm *dnstapMinimiser) setupMQTT(mqttClientCertStore *certStore) {
 
 	// Connect to the broker - this will return immediately after initiating the connection process
 	edm.autopahoWg.Add(1)
-	go edm.runAutoPaho(autopahoCm, viper.GetString("mqtt-topic"), mqttJWK)
+	go edm.runAutoPaho(autopahoCm, viper.GetString("mqtt-topic"), mqttJWK, mqttFileQueue != nil)
 }
 
 func (edm *dnstapMinimiser) setIgnoredQuestionNames(ignoredQuestionsFileName string) error {
