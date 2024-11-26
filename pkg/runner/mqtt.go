@@ -90,6 +90,7 @@ func (edm *dnstapMinimiser) runAutoPaho(cm *autopaho.ConnectionManager, topic st
 		signedMsg, err := jws.Sign(unsignedMsg, jws.WithJSON(), jws.WithKey(jwa.ES256, mqttJWK))
 		if err != nil {
 			edm.log.Error("runAutoPaho: failed to created JWS message", "error", err)
+			continue
 		}
 
 		if usingFileQueue {
