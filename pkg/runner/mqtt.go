@@ -16,8 +16,14 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jws"
 )
 
-// Small structs that implements paho/log.Logger so we can use slog with extra info in
-// autopaho config logging
+const (
+	pahoLogTypeDebug      = "debug"
+	pahoLogTypeErrors     = "errors"
+	pahoLogTypePahoDebug  = "paho_debug"
+	pahoLogTypePahoErrors = "paho_errors"
+)
+
+// pahoDebugLogger implements paho/log.Logger interface for debug-level logging
 type pahoDebugLogger struct {
 	logger *slog.Logger
 }
@@ -30,6 +36,7 @@ func (pdl pahoDebugLogger) Printf(format string, v ...interface{}) {
 	pdl.logger.Debug(fmt.Sprintf(format, v...))
 }
 
+// pahoErrorLogger implements paho/log.Logger interface for error-level logging
 type pahoErrorLogger struct {
 	logger *slog.Logger
 }
@@ -58,10 +65,10 @@ func (edm *dnstapMinimiser) newAutoPahoClientConfig(caCertPool *x509.CertPool, s
 		KeepAlive:      mqttKeepAlive,
 		OnConnectionUp: func(*autopaho.ConnectionManager, *paho.Connack) { edm.log.Info("mqtt connection up") },
 		OnConnectError: func(err error) { edm.log.Error("error whilst attempting connection", "error", err) },
-		Debug:          pahoDebugLogger{logger: edm.log.With("paho_log_type", "debug")},
-		Errors:         pahoErrorLogger{logger: edm.log.With("paho_log_type", "errors")},
-		PahoDebug:      pahoDebugLogger{logger: edm.log.With("paho_log_type", "paho_debug")},
-		PahoErrors:     pahoErrorLogger{logger: edm.log.With("paho_log_type", "paho_errors")},
+		Debug:          pahoDebugLogger{logger: edm.log.With("paho_log_type", pahoLogTypeDebug)},
+		Errors:         pahoErrorLogger{logger: edm.log.With("paho_log_type", pahoLogTypeErrors)},
+		PahoDebug:      pahoDebugLogger{logger: edm.log.With("paho_log_type", pahoLogTypePahoDebug)},
+		PahoErrors:     pahoErrorLogger{logger: edm.log.With("paho_log_type", pahoLogTypePahoErrors)},
 		ClientConfig: paho.ClientConfig{
 			ClientID:      clientID,
 			OnClientError: func(err error) { edm.log.Error("server requested disconnect", "error", err) },
