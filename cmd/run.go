@@ -13,7 +13,7 @@ var runCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Run edm in dnstap capture mode",
 	Run: func(_ *cobra.Command, _ []string) {
-		runner.Run(edmLogger)
+		runner.Run(edmLogger, edmLoggerLevel)
 	},
 }
 
@@ -30,7 +30,6 @@ func init() {
 	// is called directly, e.g.:
 	// runCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 
-	runCmd.Flags().Bool("debug", false, "print debug logging during operation")
 	runCmd.Flags().Bool("disable-session-files", false, "do not write out session parquet files")
 	runCmd.Flags().Bool("disable-histogram-sender", false, "do not check for histogram files to upload to core")
 	runCmd.Flags().Bool("disable-mqtt", false, "disable MQTT message sending")
@@ -76,8 +75,9 @@ func init() {
 	runCmd.Flags().String("http-client-cert-file", "edm-http-client.pem", "ECSDSA client cert used for authenticating to aggregate-receiver")
 	runCmd.Flags().String("http-url", "https://127.0.0.1:8443", "Service we will POST aggregates to")
 
+	// Debug options
+	runCmd.Flags().Bool("debug", false, "print debug logging during operation")
 	runCmd.Flags().String("debug-dnstap-filename", "", "File for dumping unmodified (sensitive) JSON-formatted dnstap packets we are about to process, for debugging")
-
 	runCmd.Flags().Bool("debug-enable-blockprofiling", false, "Enable profiling of goroutine blocking events")
 	runCmd.Flags().Bool("debug-enable-mutexprofiling", false, "Enable profiling of mutex contention events")
 

@@ -20,8 +20,11 @@ func main() {
 		hostname = defaultHostname
 	}
 
+	// loggerLevel controls the global logging level for the application
+	loggerLevel := new(slog.LevelVar) // Info by default
+
 	// Logger used for all output
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: loggerLevel}))
 	logger = logger.With("service", "edm")
 	logger = logger.With("hostname", hostname)
 	logger = logger.With("go_version", runtime.Version())
@@ -31,5 +34,5 @@ func main() {
 	// well
 	slog.SetDefault(logger)
 
-	cmd.Execute(logger)
+	cmd.Execute(logger, loggerLevel)
 }

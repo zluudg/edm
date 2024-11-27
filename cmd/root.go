@@ -9,8 +9,9 @@ import (
 )
 
 var (
-	cfgFile   string
-	edmLogger *slog.Logger
+	cfgFile        string
+	edmLogger      *slog.Logger
+	edmLoggerLevel *slog.LevelVar
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -26,9 +27,10 @@ outputting minimised output data.`,
 
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
-func Execute(logger *slog.Logger) {
+func Execute(logger *slog.Logger, loggerLevel *slog.LevelVar) {
 	// Set global variables so it can be used from run.go
 	edmLogger = logger
+	edmLoggerLevel = loggerLevel
 	err := rootCmd.Execute()
 	if err != nil {
 		os.Exit(1)
