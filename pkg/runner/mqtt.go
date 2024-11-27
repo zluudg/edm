@@ -23,7 +23,7 @@ type pahoDebugLogger struct {
 }
 
 func (pdl pahoDebugLogger) Println(v ...interface{}) {
-	pdl.logger.Debug(fmt.Sprintln(v...))
+	pdl.logger.Debug(fmt.Sprint(v...))
 }
 
 func (pdl pahoDebugLogger) Printf(format string, v ...interface{}) {
@@ -35,7 +35,7 @@ type pahoErrorLogger struct {
 }
 
 func (pel pahoErrorLogger) Println(v ...interface{}) {
-	pel.logger.Error(fmt.Sprintln(v...))
+	pel.logger.Error(fmt.Sprint(v...))
 }
 
 func (pel pahoErrorLogger) Printf(format string, v ...interface{}) {
