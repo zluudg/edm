@@ -20,6 +20,7 @@ func main() {
 		hostname = defaultHostname
 	}
 
+	// loggerLevel controls the global logging level for the application
 	loggerLevel := new(slog.LevelVar) // Info by default
 
 	// Logger used for all output
