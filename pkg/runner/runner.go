@@ -276,26 +276,17 @@ func (edm *dnstapMinimiser) reverseLabelsBounded(labels []string, maxLen int) []
 
 	// Append all labels except the last one
 	for i := len(labels) - 1; i > remainderElems; i-- {
-		if edm.debug {
-			edm.log.Debug("reverseLabelsBounded", "label", labels[i], "index", i)
-		}
 		boundedReverseLabels = append(boundedReverseLabels, labels[i])
 	}
 
 	// If the labels fit inside maxLen then just append the last remaining
 	// label as-is
 	if len(labels) <= maxLen {
-		if edm.debug {
-			edm.log.Debug("appending final label", "label", labels[0], "index", 0)
-		}
 		boundedReverseLabels = append(boundedReverseLabels, labels[0])
 	} else {
 		// If there are more labels than maxLen we need to concatenate
 		// them before appending the last element
 		if remainderElems > 0 {
-			if edm.debug {
-				edm.log.Debug("building slices of remainders")
-			}
 			remainderLabels := []string{}
 			for i := remainderElems; i >= 0; i-- {
 				remainderLabels = append(remainderLabels, labels[i])
@@ -750,7 +741,7 @@ func (edm *dnstapMinimiser) registerFSWatcher(filename string, callback func(str
 	return nil
 }
 
-func Run(logger *slog.Logger) {
+func Run(logger *slog.Logger, loggerLevel *slog.LevelVar) {
 	if viper.GetBool("debug-enable-blockprofiling") {
 		logger.Info("enabling blocking profiling")
 		runtime.SetBlockProfileRate(int(time.Millisecond))
@@ -763,6 +754,10 @@ func Run(logger *slog.Logger) {
 	if viper.GetString("cryptopan-key") == "" {
 		logger.Error("cryptopan setup error", "error", "missing required setting 'cryptopan-key' in config", "configfile", viper.ConfigFileUsed())
 		os.Exit(1)
+	}
+
+	if viper.GetBool("debug") {
+		loggerLevel.Set(slog.LevelDebug)
 	}
 
 	// Create an instance of the minimiser
@@ -1597,9 +1592,6 @@ minimiserLoop:
 			dawgIndex, suffixMatch, dawgModTime := wkdTracker.lookup(msg)
 			if dawgIndex != dawgNotFound {
 				wkdTracker.sendUpdate(dangerRealClientIP, msg, dawgIndex, suffixMatch, dawgModTime)
-				if edm.debug {
-					edm.log.Debug("skipping well-known domain", "domain", msg.Question[0].Name, "minimiser_id", minimiserID)
-				}
 				continue
 			}
 
@@ -2221,10 +2213,6 @@ func certPoolFromFile(fileName string) (*x509.CertPool, error) {
 // Pseudonymise IP address fields in a dnstap message
 func (edm *dnstapMinimiser) pseudonymiseDnstap(dt *dnstap.Dnstap) {
 	var err error
-
-	if edm.debug {
-		edm.log.Debug("pseudonymiseDnstap: modifying dnstap message")
-	}
 
 	// Lock is used here because the cryptopan instance can get updated at runtime.
 	edm.cryptopanMutex.RLock()

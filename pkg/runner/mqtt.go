@@ -5,17 +5,42 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/url"
 
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/autopaho/queue/file"
 	"github.com/eclipse/paho.golang/paho"
-	paholog "github.com/eclipse/paho.golang/paho/log"
 	"github.com/lestrrat-go/jwx/v2/jwa"
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/lestrrat-go/jwx/v2/jws"
 )
+
+// Small structs that implements paho/log.Logger so we can use slog with extra info in
+// autopaho config logging
+type pahoDebugLogger struct {
+	logger *slog.Logger
+}
+
+func (pdl pahoDebugLogger) Println(v ...interface{}) {
+	pdl.logger.Debug(fmt.Sprintln(v...))
+}
+
+func (pdl pahoDebugLogger) Printf(format string, v ...interface{}) {
+	pdl.logger.Debug(fmt.Sprintf(format, v...))
+}
+
+type pahoErrorLogger struct {
+	logger *slog.Logger
+}
+
+func (pel pahoErrorLogger) Println(v ...interface{}) {
+	pel.logger.Error(fmt.Sprintln(v...))
+}
+
+func (pel pahoErrorLogger) Printf(format string, v ...interface{}) {
+	pel.logger.Error(fmt.Sprintf(format, v...))
+}
 
 func (edm *dnstapMinimiser) newAutoPahoClientConfig(caCertPool *x509.CertPool, server string, clientID string, clientCertStore *certStore, mqttKeepAlive uint16, localFileQueue *file.Queue) (autopaho.ClientConfig, error) {
 	u, err := url.Parse(server)
@@ -33,10 +58,10 @@ func (edm *dnstapMinimiser) newAutoPahoClientConfig(caCertPool *x509.CertPool, s
 		KeepAlive:      mqttKeepAlive,
 		OnConnectionUp: func(*autopaho.ConnectionManager, *paho.Connack) { edm.log.Info("mqtt connection up") },
 		OnConnectError: func(err error) { edm.log.Error("error whilst attempting connection", "error", err) },
-		Debug:          paholog.NOOPLogger{},
-		Errors:         log.Default(),
-		PahoDebug:      paholog.NOOPLogger{},
-		PahoErrors:     log.Default(),
+		Debug:          pahoDebugLogger{logger: edm.log.With("paho_log_type", "debug")},
+		Errors:         pahoErrorLogger{logger: edm.log.With("paho_log_type", "errors")},
+		PahoDebug:      pahoDebugLogger{logger: edm.log.With("paho_log_type", "paho_debug")},
+		PahoErrors:     pahoErrorLogger{logger: edm.log.With("paho_log_type", "paho_errors")},
 		ClientConfig: paho.ClientConfig{
 			ClientID:      clientID,
 			OnClientError: func(err error) { edm.log.Error("server requested disconnect", "error", err) },
@@ -53,11 +78,6 @@ func (edm *dnstapMinimiser) newAutoPahoClientConfig(caCertPool *x509.CertPool, s
 	if localFileQueue != nil {
 		edm.log.Info("using file based queue for MQTT messages")
 		cliCfg.Queue = localFileQueue
-	}
-
-	if edm.debug {
-		cliCfg.Debug = log.Default()
-		cliCfg.PahoDebug = log.Default()
 	}
 
 	return cliCfg, nil
