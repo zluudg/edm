@@ -1,7 +1,6 @@
 package runner
 
 import (
-	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
@@ -121,7 +120,7 @@ func (edm *dnstapMinimiser) runAutoPaho(cm *autopaho.ConnectionManager, topic st
 		}
 
 		if usingFileQueue {
-			err = cm.PublishViaQueue(context.Background(), &autopaho.QueuePublish{
+			err = cm.PublishViaQueue(edm.autopahoCtx, &autopaho.QueuePublish{
 				Publish: &paho.Publish{
 					QoS:     0,
 					Topic:   topic,
