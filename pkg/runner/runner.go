@@ -1928,14 +1928,14 @@ func (edm *dnstapMinimiser) parsePacket(dt *dnstap.Dnstap, isQuery bool) (*dns.M
 			edm.log.Error("unable to unpack query message", "error", err, "query_address", queryAddress, "response_address", responseAddress)
 			msg = nil
 		}
-		t = time.Unix(int64(*dt.Message.QueryTimeSec), int64(*dt.Message.QueryTimeNsec))
+		t = time.Unix(int64(*dt.Message.QueryTimeSec), int64(*dt.Message.QueryTimeNsec)).UTC() // #nosec G115 -- Overflowing the int64 would result in interesting timestamps but not much else
 	} else {
 		err = msg.Unpack(dt.Message.ResponseMessage)
 		if err != nil {
 			edm.log.Error("unable to unpack response message", "error", err, "query_address", queryAddress, "response_address", responseAddress)
 			msg = nil
 		}
-		t = time.Unix(int64(*dt.Message.ResponseTimeSec), int64(*dt.Message.ResponseTimeNsec))
+		t = time.Unix(int64(*dt.Message.ResponseTimeSec), int64(*dt.Message.ResponseTimeNsec)).UTC() // #nosec G115 -- Overflowing the int64 would result in interesting timestamps but not much else
 	}
 
 	return msg, t
