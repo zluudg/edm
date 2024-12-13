@@ -118,7 +118,7 @@ type histogramData struct {
 	NXCount         int64   `parquet:"name=nx_count, type=INT64, convertedtype=UINT_64"`
 	FailCount       int64   `parquet:"name=fail_count, type=INT64, convertedtype=UINT_64"`
 	OtherRcodeCount int64   `parquet:"name=other_rcode_count, type=INT64, convertedtype=UINT_64"`
-	DTMStatusBits   int64   `parquet:"name=edm_status_bits, type=INT64, convertedtype=UINT_64"`
+	EDMStatusBits   int64   `parquet:"name=edm_status_bits, type=INT64, convertedtype=UINT_64"`
 	// The hll.Hll structs are not expected to be included in the output
 	// parquet file, and thus do not need to be exported
 	v4ClientHLL           hll.Hll
@@ -2330,13 +2330,13 @@ collectorLoop:
 				// better. They are filled in prior to writing out the parquet file.
 				wkd.m[wu.dawgIndex] = &histogramData{}
 
-				dsb := new(edmStatusBits)
+				esb := new(edmStatusBits)
 				if wu.suffixMatch {
-					dsb.set(edmStatusWellKnownWildcard)
+					esb.set(edmStatusWellKnownWildcard)
 				} else {
-					dsb.set(edmStatusWellKnownExact)
+					esb.set(edmStatusWellKnownExact)
 				}
-				wkd.m[wu.dawgIndex].DTMStatusBits = int64(*dsb)
+				wkd.m[wu.dawgIndex].EDMStatusBits = int64(*esb) // #nosec G115 -- The parquet field has convertedType=UINT_64 so overflow in uint64 -> int64 is OK
 			}
 
 			wkd.m[wu.dawgIndex].OKCount += wu.OKCount
