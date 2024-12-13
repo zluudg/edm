@@ -506,7 +506,7 @@ func (edm *dnstapMinimiser) setupMQTT(mqttClientCertStore *certStore) {
 		}
 	}
 
-	autopahoConfig, err := edm.newAutoPahoClientConfig(mqttCACertPool, viper.GetString("mqtt-server"), viper.GetString("mqtt-client-id"), mqttClientCertStore, uint16(viper.GetInt("mqtt-keepalive")), mqttFileQueue)
+	autopahoConfig, err := edm.newAutoPahoClientConfig(mqttCACertPool, viper.GetString("mqtt-server"), viper.GetString("mqtt-client-id"), mqttClientCertStore, viper.GetUint16("mqtt-keepalive"), mqttFileQueue)
 	if err != nil {
 		edm.log.Error("unable to create autopaho config", "error", err)
 		os.Exit(1)
