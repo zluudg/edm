@@ -1631,12 +1631,12 @@ func (edm *dnstapMinimiser) newSession(dt *dnstap.Dnstap, msg *dns.Msg, isQuery 
 	sd := &sessionData{}
 
 	if dt.Message.QueryPort != nil {
-		qp := int32(*dt.Message.QueryPort)
+		qp := int32(*dt.Message.QueryPort) // #nosec G115 -- QueryPort is defined as 16-bit number and is used in parquet field with type=INT32, convertedType=UINT_16
 		sd.SourcePort = &qp
 	}
 
 	if dt.Message.ResponsePort != nil {
-		rp := int32(*dt.Message.ResponsePort)
+		rp := int32(*dt.Message.ResponsePort) // #nosec G115 -- ResponsePort is defined as 16-bit number and is used in parquet field with type=INT32, convertedType=UINT_16
 		sd.DestPort = &rp
 	}
 
@@ -1668,7 +1668,7 @@ func (edm *dnstapMinimiser) newSession(dt *dnstap.Dnstap, msg *dns.Msg, isQuery 
 			if err != nil {
 				edm.log.Error("unable to create uint32 from dt.Message.QueryAddress", "error", err)
 			} else {
-				i32SourceIPInt := int32(sourceIPInt)
+				i32SourceIPInt := int32(sourceIPInt) // #nosec G115 -- Used in parquet struct with convertedType=UINT_32
 				sd.SourceIPv4 = &i32SourceIPInt
 			}
 		}
@@ -1678,7 +1678,7 @@ func (edm *dnstapMinimiser) newSession(dt *dnstap.Dnstap, msg *dns.Msg, isQuery 
 			if err != nil {
 				edm.log.Error("unable to create uint32 from dt.Message.ResponseAddress", "error", err)
 			} else {
-				i32DestIPInt := int32(destIPInt)
+				i32DestIPInt := int32(destIPInt) // #nosec G115 -- Used in parquet struct with convertedType=UINT_32
 				sd.DestIPv4 = &i32DestIPInt
 			}
 		}
@@ -1688,8 +1688,8 @@ func (edm *dnstapMinimiser) newSession(dt *dnstap.Dnstap, msg *dns.Msg, isQuery 
 			if err != nil {
 				edm.log.Error("unable to create uint64 variables from dt.Message.QueryAddress", "error", err)
 			} else {
-				i64SourceIntNetwork := int64(sourceIPIntNetwork)
-				i64SourceIntHost := int64(sourceIPIntHost)
+				i64SourceIntNetwork := int64(sourceIPIntNetwork) // #nosec G115 -- Used in parquet struct with convertedType=UINT_64
+				i64SourceIntHost := int64(sourceIPIntHost)       // #nosec G115 -- Used in parquet struct with convertedType=UINT_64
 				sd.SourceIPv6Network = &i64SourceIntNetwork
 				sd.SourceIPv6Host = &i64SourceIntHost
 			}
@@ -1700,8 +1700,8 @@ func (edm *dnstapMinimiser) newSession(dt *dnstap.Dnstap, msg *dns.Msg, isQuery 
 			if err != nil {
 				edm.log.Error("unable to create uint64 variables from dt.Message.ResponseAddress", "error", err)
 			} else {
-				i64dIntNetwork := int64(dipIntNetwork)
-				i64dIntHost := int64(dipIntHost)
+				i64dIntNetwork := int64(dipIntNetwork) // #nosec G115 -- Used in parquet struct with convertedType=UINT_64
+				i64dIntHost := int64(dipIntHost)       // #nosec G115 -- Used in parquet struct with convertedType=UINT_64
 				sd.SourceIPv6Network = &i64dIntNetwork
 				sd.SourceIPv6Host = &i64dIntHost
 			}
