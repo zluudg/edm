@@ -23,7 +23,7 @@ const (
 )
 
 func bitsFromMsg(dns *dns.Msg) uint16 {
-	bits := uint16(dns.Opcode)<<11 | uint16(dns.Rcode&0xF)
+	bits := uint16(dns.Opcode)<<11 | uint16(dns.Rcode&0xF) // #nosec G115 -- The Opcode and Rcode fields while ints in the dns struct represents only 4 bits each
 	if dns.Response {
 		bits |= _QR
 	}

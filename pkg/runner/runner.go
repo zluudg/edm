@@ -118,7 +118,7 @@ type histogramData struct {
 	NXCount         int64   `parquet:"name=nx_count, type=INT64, convertedtype=UINT_64"`
 	FailCount       int64   `parquet:"name=fail_count, type=INT64, convertedtype=UINT_64"`
 	OtherRcodeCount int64   `parquet:"name=other_rcode_count, type=INT64, convertedtype=UINT_64"`
-	DTMStatusBits   int64   `parquet:"name=edm_status_bits, type=INT64, convertedtype=UINT_64"`
+	EDMStatusBits   int64   `parquet:"name=edm_status_bits, type=INT64, convertedtype=UINT_64"`
 	// The hll.Hll structs are not expected to be included in the output
 	// parquet file, and thus do not need to be exported
 	v4ClientHLL           hll.Hll
@@ -506,7 +506,7 @@ func (edm *dnstapMinimiser) setupMQTT(mqttClientCertStore *certStore) {
 		}
 	}
 
-	autopahoConfig, err := edm.newAutoPahoClientConfig(mqttCACertPool, viper.GetString("mqtt-server"), viper.GetString("mqtt-client-id"), mqttClientCertStore, uint16(viper.GetInt("mqtt-keepalive")), mqttFileQueue)
+	autopahoConfig, err := edm.newAutoPahoClientConfig(mqttCACertPool, viper.GetString("mqtt-server"), viper.GetString("mqtt-client-id"), mqttClientCertStore, viper.GetUint16("mqtt-keepalive"), mqttFileQueue)
 	if err != nil {
 		edm.log.Error("unable to create autopaho config", "error", err)
 		os.Exit(1)
@@ -1631,12 +1631,12 @@ func (edm *dnstapMinimiser) newSession(dt *dnstap.Dnstap, msg *dns.Msg, isQuery 
 	sd := &sessionData{}
 
 	if dt.Message.QueryPort != nil {
-		qp := int32(*dt.Message.QueryPort)
+		qp := int32(*dt.Message.QueryPort) // #nosec G115 -- QueryPort is defined as 16-bit number and is used in parquet field with type=INT32, convertedType=UINT_16
 		sd.SourcePort = &qp
 	}
 
 	if dt.Message.ResponsePort != nil {
-		rp := int32(*dt.Message.ResponsePort)
+		rp := int32(*dt.Message.ResponsePort) // #nosec G115 -- ResponsePort is defined as 16-bit number and is used in parquet field with type=INT32, convertedType=UINT_16
 		sd.DestPort = &rp
 	}
 
@@ -1668,7 +1668,7 @@ func (edm *dnstapMinimiser) newSession(dt *dnstap.Dnstap, msg *dns.Msg, isQuery 
 			if err != nil {
 				edm.log.Error("unable to create uint32 from dt.Message.QueryAddress", "error", err)
 			} else {
-				i32SourceIPInt := int32(sourceIPInt)
+				i32SourceIPInt := int32(sourceIPInt) // #nosec G115 -- Used in parquet struct with convertedType=UINT_32
 				sd.SourceIPv4 = &i32SourceIPInt
 			}
 		}
@@ -1678,7 +1678,7 @@ func (edm *dnstapMinimiser) newSession(dt *dnstap.Dnstap, msg *dns.Msg, isQuery 
 			if err != nil {
 				edm.log.Error("unable to create uint32 from dt.Message.ResponseAddress", "error", err)
 			} else {
-				i32DestIPInt := int32(destIPInt)
+				i32DestIPInt := int32(destIPInt) // #nosec G115 -- Used in parquet struct with convertedType=UINT_32
 				sd.DestIPv4 = &i32DestIPInt
 			}
 		}
@@ -1688,8 +1688,8 @@ func (edm *dnstapMinimiser) newSession(dt *dnstap.Dnstap, msg *dns.Msg, isQuery 
 			if err != nil {
 				edm.log.Error("unable to create uint64 variables from dt.Message.QueryAddress", "error", err)
 			} else {
-				i64SourceIntNetwork := int64(sourceIPIntNetwork)
-				i64SourceIntHost := int64(sourceIPIntHost)
+				i64SourceIntNetwork := int64(sourceIPIntNetwork) // #nosec G115 -- Used in parquet struct with convertedType=UINT_64
+				i64SourceIntHost := int64(sourceIPIntHost)       // #nosec G115 -- Used in parquet struct with convertedType=UINT_64
 				sd.SourceIPv6Network = &i64SourceIntNetwork
 				sd.SourceIPv6Host = &i64SourceIntHost
 			}
@@ -1700,8 +1700,8 @@ func (edm *dnstapMinimiser) newSession(dt *dnstap.Dnstap, msg *dns.Msg, isQuery 
 			if err != nil {
 				edm.log.Error("unable to create uint64 variables from dt.Message.ResponseAddress", "error", err)
 			} else {
-				i64dIntNetwork := int64(dipIntNetwork)
-				i64dIntHost := int64(dipIntHost)
+				i64dIntNetwork := int64(dipIntNetwork) // #nosec G115 -- Used in parquet struct with convertedType=UINT_64
+				i64dIntHost := int64(dipIntHost)       // #nosec G115 -- Used in parquet struct with convertedType=UINT_64
 				sd.SourceIPv6Network = &i64dIntNetwork
 				sd.SourceIPv6Host = &i64dIntHost
 			}
@@ -1928,14 +1928,14 @@ func (edm *dnstapMinimiser) parsePacket(dt *dnstap.Dnstap, isQuery bool) (*dns.M
 			edm.log.Error("unable to unpack query message", "error", err, "query_address", queryAddress, "response_address", responseAddress)
 			msg = nil
 		}
-		t = time.Unix(int64(*dt.Message.QueryTimeSec), int64(*dt.Message.QueryTimeNsec))
+		t = time.Unix(int64(*dt.Message.QueryTimeSec), int64(*dt.Message.QueryTimeNsec)).UTC() // #nosec G115 -- Overflowing the int64 would result in interesting timestamps but not much else
 	} else {
 		err = msg.Unpack(dt.Message.ResponseMessage)
 		if err != nil {
 			edm.log.Error("unable to unpack response message", "error", err, "query_address", queryAddress, "response_address", responseAddress)
 			msg = nil
 		}
-		t = time.Unix(int64(*dt.Message.ResponseTimeSec), int64(*dt.Message.ResponseTimeNsec))
+		t = time.Unix(int64(*dt.Message.ResponseTimeSec), int64(*dt.Message.ResponseTimeNsec)).UTC() // #nosec G115 -- Overflowing the int64 would result in interesting timestamps but not much else
 	}
 
 	return msg, t
@@ -2330,13 +2330,13 @@ collectorLoop:
 				// better. They are filled in prior to writing out the parquet file.
 				wkd.m[wu.dawgIndex] = &histogramData{}
 
-				dsb := new(edmStatusBits)
+				esb := new(edmStatusBits)
 				if wu.suffixMatch {
-					dsb.set(edmStatusWellKnownWildcard)
+					esb.set(edmStatusWellKnownWildcard)
 				} else {
-					dsb.set(edmStatusWellKnownExact)
+					esb.set(edmStatusWellKnownExact)
 				}
-				wkd.m[wu.dawgIndex].DTMStatusBits = int64(*dsb)
+				wkd.m[wu.dawgIndex].EDMStatusBits = int64(*esb) // #nosec G115 -- The parquet field has convertedType=UINT_64 so overflow in uint64 -> int64 is OK
 			}
 
 			wkd.m[wu.dawgIndex].OKCount += wu.OKCount
