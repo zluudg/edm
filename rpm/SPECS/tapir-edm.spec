@@ -1,5 +1,6 @@
 Name:          tapir-edm
-Version:       %{_tapirrelease}
+# Replaced by makefile when building srpm
+Version:       @@VERSION@@
 Release:       1%{?dist}
 Group:         dnstapir/edge
 Summary:       DNSTAPIR EDGE Policy Processor
