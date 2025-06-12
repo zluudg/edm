@@ -4,3 +4,12 @@ pkg/protocols/checkout
 well-known-domains.dawg
 edm.toml
 pkg/runner/testdata/generated-*
+*.tar.gz
+tapir-edm
+*.src.rpm
+rpm/
+!/rpm/SOURCES/well-known-domains.dawg
+!/rpm/SOURCES/well-known-domains.dawg
+!rpm/SOURCES/tapir-edm.service
+!rpm/SPECS/tapir-edm.spec
+VERSION
