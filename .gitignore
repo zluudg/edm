@@ -3,3 +3,4 @@ edm
 pkg/protocols/checkout
 well-known-domains.dawg
 edm.toml
+pkg/runner/testdata/generated-*
