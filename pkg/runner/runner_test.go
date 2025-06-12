@@ -1858,10 +1858,8 @@ func TestHistogramWriter(t *testing.T) {
 	v4hll.AddRaw(murmur3.Sum64(ip4.AsSlice()))
 	v6hll.AddRaw(murmur3.Sum64(ip6.AsSlice()))
 
-	histogramDataSchema := parquet.SchemaOf(new(histogramData))
-
 	snappyCodec := parquet.LookupCompressionCodec(format.Snappy)
-	parquetWriter := parquet.NewGenericWriter[histogramData](f, histogramDataSchema, parquet.Compression(snappyCodec))
+	parquetWriter := parquet.NewGenericWriter[histogramData](f, parquet.Compression(snappyCodec))
 
 	hd := histogramData{
 		dnsLabels: dnsLabels{
@@ -1913,11 +1911,9 @@ func BenchmarkHistogramWriter(b *testing.B) {
 	v4hll.AddRaw(murmur3.Sum64(ip4.AsSlice()))
 	v6hll.AddRaw(murmur3.Sum64(ip6.AsSlice()))
 
-	histogramDataSchema := parquet.SchemaOf(new(histogramData))
-
 	var buf bytes.Buffer
 	snappyCodec := parquet.LookupCompressionCodec(format.Snappy)
-	parquetWriter := parquet.NewGenericWriter[histogramData](&buf, histogramDataSchema, parquet.Compression(snappyCodec))
+	parquetWriter := parquet.NewGenericWriter[histogramData](&buf, parquet.Compression(snappyCodec))
 
 	hd := histogramData{
 		dnsLabels: dnsLabels{

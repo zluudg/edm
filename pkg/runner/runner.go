@@ -2167,7 +2167,7 @@ func (edm *dnstapMinimiser) writeSessionParquet(ps *prevSessions, dataDir string
 	}()
 
 	snappyCodec := parquet.LookupCompressionCodec(format.Snappy)
-	parquetWriter := parquet.NewGenericWriter[sessionData](outFile, parquet.Compression(snappyCodec))
+	parquetWriter := parquet.NewGenericWriter[sessionData](outFile, sessionDataSchema, parquet.Compression(snappyCodec))
 
 	for _, sd := range ps.sessions {
 		_, err = parquetWriter.Write([]sessionData{*sd})
