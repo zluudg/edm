@@ -135,41 +135,6 @@ const (
 	edmStatusMax
 )
 
-// Histogram struct implementing description at https://github.com/dnstapir/datasets/blob/main/HistogramReport.fbs
-type histogramDataXitongsys struct {
-	// The time we started collecting the data contained in the histogram
-	StartTime int64 `parquet:"name=start_time, type=INT64, logicaltype=TIMESTAMP, logicaltype.isadjustedtoutc=true, logicaltype.unit=MICROS"`
-	// Store label fields as pointers so we can signal them being unset as
-	// opposed to an empty string
-	Label0          *string `parquet:"name=label0, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label1          *string `parquet:"name=label1, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label2          *string `parquet:"name=label2, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label3          *string `parquet:"name=label3, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label4          *string `parquet:"name=label4, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label5          *string `parquet:"name=label5, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label6          *string `parquet:"name=label6, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label7          *string `parquet:"name=label7, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label8          *string `parquet:"name=label8, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label9          *string `parquet:"name=label9, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	ACount          int64   `parquet:"name=a_count, type=INT64, convertedtype=UINT_64"`
-	AAAACount       int64   `parquet:"name=aaaa_count, type=INT64, convertedtype=UINT_64"`
-	MXCount         int64   `parquet:"name=mx_count, type=INT64, convertedtype=UINT_64"`
-	NSCount         int64   `parquet:"name=ns_count, type=INT64, convertedtype=UINT_64"`
-	OtherTypeCount  int64   `parquet:"name=other_type_count, type=INT64, convertedtype=UINT_64"`
-	NonINCount      int64   `parquet:"name=non_in_count, type=INT64, convertedtype=UINT_64"`
-	OKCount         int64   `parquet:"name=ok_count, type=INT64, convertedtype=UINT_64"`
-	NXCount         int64   `parquet:"name=nx_count, type=INT64, convertedtype=UINT_64"`
-	FailCount       int64   `parquet:"name=fail_count, type=INT64, convertedtype=UINT_64"`
-	OtherRcodeCount int64   `parquet:"name=other_rcode_count, type=INT64, convertedtype=UINT_64"`
-	EDMStatusBits   int64   `parquet:"name=edm_status_bits, type=INT64, convertedtype=UINT_64"`
-	// The hll.Hll structs are not expected to be included in the output
-	// parquet file, and thus do not need to be exported
-	v4ClientHLL           hll.Hll
-	v6ClientHLL           hll.Hll
-	V4ClientCountHLLBytes *string `parquet:"name=v4client_count, type=BYTE_ARRAY"`
-	V6ClientCountHLLBytes *string `parquet:"name=v6client_count, type=BYTE_ARRAY"`
-}
-
 // Histogram struct implementing description at https://github.com/dnstapir/datasets/blob/main/HistogramReport.md
 type histogramData struct {
 	StartTime int64 `parquet:"start_time,timestamp(microsecond)"`
@@ -239,37 +204,6 @@ var sessionDataSchema = parquet.NewSchema(
 		"response_message":    parquet.Optional(parquet.Leaf(parquet.ByteArrayType)),
 	},
 )
-
-type sessionDataXitongsys struct {
-	// Would be nice to share the label0-9 fields from histogramData but
-	// embedding doesnt seem to work that way:
-	// https://github.com/xitongsys/parquet-go/issues/203
-	Label0       *string `parquet:"name=label0, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label1       *string `parquet:"name=label1, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label2       *string `parquet:"name=label2, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label3       *string `parquet:"name=label3, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label4       *string `parquet:"name=label4, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label5       *string `parquet:"name=label5, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label6       *string `parquet:"name=label6, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label7       *string `parquet:"name=label7, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label8       *string `parquet:"name=label8, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	Label9       *string `parquet:"name=label9, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	ServerID     *string `parquet:"name=server_id, type=BYTE_ARRAY"`
-	QueryTime    *int64  `parquet:"name=query_time, type=INT64, logicaltype=TIMESTAMP, logicaltype.isadjustedtoutc=true, logicaltype.unit=MICROS"`
-	ResponseTime *int64  `parquet:"name=response_time, type=INT64, logicaltype=TIMESTAMP, logicaltype.isadjustedtoutc=true, logicaltype.unit=MICROS"`
-	SourceIPv4   *int32  `parquet:"name=source_ipv4, type=INT32, convertedtype=UINT_32"`
-	DestIPv4     *int32  `parquet:"name=dest_ipv4, type=INT32, convertedtype=UINT_32"`
-	// IPv6 addresses are split up into a network and host part, for one thing go does not have native uint128 types
-	SourceIPv6Network *int64  `parquet:"name=source_ipv6_network, type=INT64, convertedtype=UINT_64"`
-	SourceIPv6Host    *int64  `parquet:"name=source_ipv6_host, type=INT64, convertedtype=UINT_64"`
-	DestIPv6Network   *int64  `parquet:"name=dest_ipv6_network, type=INT64, convertedtype=UINT_64"`
-	DestIPv6Host      *int64  `parquet:"name=dest_ipv6_host, type=INT64, convertedtype=UINT_64"`
-	SourcePort        *int32  `parquet:"name=source_port, type=INT32, convertedtype=UINT_16"`
-	DestPort          *int32  `parquet:"name=dest_port, type=INT32, convertedtype=UINT_16"`
-	DNSProtocol       *int32  `parquet:"name=dns_protocol, type=INT32, convertedtype=UINT_8"`
-	QueryMessage      *string `parquet:"name=query_message, type=BYTE_ARRAY"`
-	ResponseMessage   *string `parquet:"name=response_message, type=BYTE_ARRAY"`
-}
 
 type dnsLabels struct {
 	// Store label fields as pointers so we can signal them being unset as
