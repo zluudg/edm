@@ -42,5 +42,5 @@ srpm: SHELL:=/bin/bash
 srpm: tarball
 	mkdir -p rpm/{BUILD,RPMS,SRPMS}
 	cp $(OUTPUT).tar.gz rpm/SOURCES/
-	rpmbuild -bs --define "%_topdir ./rpm" --define "%_tapirrelease $$(cat VERSION)" --undefine=dist $(SPECFILE)
+	rpmbuild -bs --define "%_topdir ./rpm" --undefine=dist $(SPECFILE)
 	test -z "$(outdir)" || cp rpm/SRPMS/*.src.rpm "$(outdir)"
