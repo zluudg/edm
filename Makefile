@@ -25,10 +25,12 @@ endif
 	CGO_ENABLED=0 go build -o $(OUTPUT)
 
 clean:
-	rm -f $(OUTPUT)
-	@rm -f *.tar.gz
-	@rm -f rpm/SOURCES/*.tar.gz
-	@rm -rf rpm/{BUILD,BUILDROOT,SRPMS,RPMS}
+	-rm -f $(OUTPUT)
+	-rm -f edm
+	-rm -f VERSION
+	-rm -f *.tar.gz
+	-rm -f rpm/SOURCES/*.tar.gz
+	-rm -rf rpm/{BUILD,BUILDROOT,SRPMS,RPMS}
 
 tarball:
 	git describe --always --tags --dirty | awk -F "-" '{print $$1"^"$$2"."$$3}' > VERSION
