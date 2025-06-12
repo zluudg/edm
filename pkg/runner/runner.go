@@ -40,6 +40,8 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwa"
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/miekg/dns"
+	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/format"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -48,7 +50,6 @@ import (
 	"github.com/smhanov/dawg"
 	"github.com/spaolacci/murmur3"
 	"github.com/spf13/viper"
-	"github.com/xitongsys/parquet-go/writer"
 	"github.com/yawning/cryptopan"
 	"go4.org/netipx"
 	"golang.org/x/crypto/argon2"
@@ -135,7 +136,7 @@ const (
 )
 
 // Histogram struct implementing description at https://github.com/dnstapir/datasets/blob/main/HistogramReport.fbs
-type histogramData struct {
+type histogramDataXitongsys struct {
 	// The time we started collecting the data contained in the histogram
 	StartTime int64 `parquet:"name=start_time, type=INT64, logicaltype=TIMESTAMP, logicaltype.isadjustedtoutc=true, logicaltype.unit=MICROS"`
 	// Store label fields as pointers so we can signal them being unset as
@@ -169,7 +170,77 @@ type histogramData struct {
 	V6ClientCountHLLBytes *string `parquet:"name=v6client_count, type=BYTE_ARRAY"`
 }
 
-type sessionData struct {
+// Histogram struct implementing description at https://github.com/dnstapir/datasets/blob/main/HistogramReport.md
+type histogramData struct {
+	StartTime int64 `parquet:"start_time,timestamp(microsecond)"`
+	dnsLabels
+	// The time we started collecting the data contained in the histogram
+	ACount          uint64 `parquet:"a_count"`
+	AAAACount       uint64 `parquet:"aaaa_count"`
+	MXCount         uint64 `parquet:"mx_count"`
+	NSCount         uint64 `parquet:"ns_count"`
+	OtherTypeCount  uint64 `parquet:"other_type_count"`
+	NonINCount      uint64 `parquet:"non_in_count"`
+	OKCount         uint64 `parquet:"ok_count"`
+	NXCount         uint64 `parquet:"nx_count"`
+	FailCount       uint64 `parquet:"fail_count"`
+	OtherRcodeCount uint64 `parquet:"other_rcode_count"`
+	EDMStatusBits   uint64 `parquet:"edm_status_bits"`
+	// The hll.Hll structs are not expected to be included in the output
+	// parquet file, and thus do not need to be exported
+	v4ClientHLL hll.Hll
+	v6ClientHLL hll.Hll
+	// Would probably be cleaner to use a []byte instead of string with
+	// struct tag "bytes" here, but it seems the parquet-go library does
+	// not handle "optional" []byte fields correctly right now, see:
+	// https://github.com/parquet-go/parquet-go/issues/303
+	V4ClientCountHLLBytes string `parquet:"v4client_count,bytes,optional"`
+	V6ClientCountHLLBytes string `parquet:"v6client_count,bytes,optional"`
+}
+
+// We need to create the session data schema by hand instead of basing it of
+// the sessionData struct directly because we have uint16 fields for ports and
+// these are not currently supported, see:
+// https://github.com/parquet-go/parquet-go/pull/122
+//
+// One drawback of writing out the schema like this is due to the use of a map
+// in the parquet.Group we can not control the ordering of the fields, they are
+// sorted however, see:
+// Issue regarding order:
+// https://github.com/parquet-go/parquet-go/issues/43
+// Commit that makes the map sorted:
+// https://github.com/parquet-go/parquet-go/commit/035e69db6792fdc9089e238084bebe39e26c74b0
+var sessionDataSchema = parquet.NewSchema(
+	"sessionData",
+	parquet.Group{
+		"label0":              parquet.Optional(parquet.String()),
+		"label1":              parquet.Optional(parquet.String()),
+		"label2":              parquet.Optional(parquet.String()),
+		"label3":              parquet.Optional(parquet.String()),
+		"label4":              parquet.Optional(parquet.String()),
+		"label5":              parquet.Optional(parquet.String()),
+		"label6":              parquet.Optional(parquet.String()),
+		"label7":              parquet.Optional(parquet.String()),
+		"label8":              parquet.Optional(parquet.String()),
+		"label9":              parquet.Optional(parquet.String()),
+		"server_id":           parquet.Optional(parquet.Leaf(parquet.ByteArrayType)),
+		"query_time":          parquet.Optional(parquet.Timestamp(parquet.Microsecond)),
+		"response_time":       parquet.Optional(parquet.Timestamp(parquet.Microsecond)),
+		"source_ipv4":         parquet.Optional(parquet.Uint(32)),
+		"dest_ipv4":           parquet.Optional(parquet.Uint(32)),
+		"source_ipv6_network": parquet.Optional(parquet.Uint(64)),
+		"source_ipv6_host":    parquet.Optional(parquet.Uint(64)),
+		"dest_ipv6_network":   parquet.Optional(parquet.Uint(64)),
+		"dest_ipv6_host":      parquet.Optional(parquet.Uint(64)),
+		"source_port":         parquet.Optional(parquet.Uint(16)),
+		"dest_port":           parquet.Optional(parquet.Uint(16)),
+		"dns_protocol":        parquet.Optional(parquet.Uint(8)),
+		"query_message":       parquet.Optional(parquet.Leaf(parquet.ByteArrayType)),
+		"response_message":    parquet.Optional(parquet.Leaf(parquet.ByteArrayType)),
+	},
+)
+
+type sessionDataXitongsys struct {
 	// Would be nice to share the label0-9 fields from histogramData but
 	// embedding doesnt seem to work that way:
 	// https://github.com/xitongsys/parquet-go/issues/203
@@ -198,6 +269,40 @@ type sessionData struct {
 	DNSProtocol       *int32  `parquet:"name=dns_protocol, type=INT32, convertedtype=UINT_8"`
 	QueryMessage      *string `parquet:"name=query_message, type=BYTE_ARRAY"`
 	ResponseMessage   *string `parquet:"name=response_message, type=BYTE_ARRAY"`
+}
+
+type dnsLabels struct {
+	// Store label fields as pointers so we can signal them being unset as
+	// opposed to an empty string
+	Label0 *string `parquet:"label0"`
+	Label1 *string `parquet:"label1"`
+	Label2 *string `parquet:"label2"`
+	Label3 *string `parquet:"label3"`
+	Label4 *string `parquet:"label4"`
+	Label5 *string `parquet:"label5"`
+	Label6 *string `parquet:"label6"`
+	Label7 *string `parquet:"label7"`
+	Label8 *string `parquet:"label8"`
+	Label9 *string `parquet:"label9"`
+}
+
+type sessionData struct {
+	dnsLabels
+	ServerID     *string `parquet:"server_id"`
+	QueryTime    *int64  `parquet:"query_time"`
+	ResponseTime *int64  `parquet:"response_time"`
+	SourceIPv4   *int32  `parquet:"source_ipv4"`
+	DestIPv4     *int32  `parquet:"dest_ipv4"`
+	// IPv6 addresses are split up into a network and host part, for one thing go does not have native uint128 types
+	SourceIPv6Network *int64  `parquet:"source_ipv6_network"`
+	SourceIPv6Host    *int64  `parquet:"source_ipv6_host"`
+	DestIPv6Network   *int64  `parquet:"dest_ipv6_network"`
+	DestIPv6Host      *int64  `parquet:"dest_ipv6_host"`
+	SourcePort        *int32  `parquet:"source_port"`
+	DestPort          *int32  `parquet:"dest_port"`
+	DNSProtocol       *int32  `parquet:"dns_protocol"`
+	QueryMessage      *string `parquet:"query_message"`
+	ResponseMessage   *string `parquet:"response_message"`
 }
 
 type prevSessions struct {
@@ -233,7 +338,7 @@ func newCertStore() *certStore {
 	return &certStore{}
 }
 
-func (edm *dnstapMinimiser) setHistogramLabels(labels []string, labelLimit int, hd *histogramData) {
+func (edm *dnstapMinimiser) setLabels(labels []string, labelLimit int, l *dnsLabels) {
 	// If labels is nil (the "." zone) we can depend on the zero type of
 	// the label fields being nil, so nothing to do
 	if labels == nil {
@@ -245,60 +350,25 @@ func (edm *dnstapMinimiser) setHistogramLabels(labels []string, labelLimit int, 
 	for index := range reverseLabels {
 		switch index {
 		case 0:
-			hd.Label0 = &reverseLabels[index]
+			l.Label0 = &reverseLabels[index]
 		case 1:
-			hd.Label1 = &reverseLabels[index]
+			l.Label1 = &reverseLabels[index]
 		case 2:
-			hd.Label2 = &reverseLabels[index]
+			l.Label2 = &reverseLabels[index]
 		case 3:
-			hd.Label3 = &reverseLabels[index]
+			l.Label3 = &reverseLabels[index]
 		case 4:
-			hd.Label4 = &reverseLabels[index]
+			l.Label4 = &reverseLabels[index]
 		case 5:
-			hd.Label5 = &reverseLabels[index]
+			l.Label5 = &reverseLabels[index]
 		case 6:
-			hd.Label6 = &reverseLabels[index]
+			l.Label6 = &reverseLabels[index]
 		case 7:
-			hd.Label7 = &reverseLabels[index]
+			l.Label7 = &reverseLabels[index]
 		case 8:
-			hd.Label8 = &reverseLabels[index]
+			l.Label8 = &reverseLabels[index]
 		case 9:
-			hd.Label9 = &reverseLabels[index]
-		}
-	}
-}
-
-func (edm *dnstapMinimiser) setSessionLabels(labels []string, labelLimit int, sd *sessionData) {
-	// If labels is nil (the "." zone) we can depend on the zero type of
-	// the label fields being nil, so nothing to do
-	if labels == nil {
-		return
-	}
-
-	reverseLabels := edm.reverseLabelsBounded(labels, labelLimit)
-
-	for index := range reverseLabels {
-		switch index {
-		case 0:
-			sd.Label0 = &reverseLabels[index]
-		case 1:
-			sd.Label1 = &reverseLabels[index]
-		case 2:
-			sd.Label2 = &reverseLabels[index]
-		case 3:
-			sd.Label3 = &reverseLabels[index]
-		case 4:
-			sd.Label4 = &reverseLabels[index]
-		case 5:
-			sd.Label5 = &reverseLabels[index]
-		case 6:
-			sd.Label6 = &reverseLabels[index]
-		case 7:
-			sd.Label7 = &reverseLabels[index]
-		case 8:
-			sd.Label8 = &reverseLabels[index]
-		case 9:
-			sd.Label9 = &reverseLabels[index]
+			l.Label9 = &reverseLabels[index]
 		}
 	}
 }
@@ -1785,7 +1855,7 @@ func (edm *dnstapMinimiser) newSession(dt *dnstap.Dnstap, msg *dns.Msg, isQuery 
 		}
 	}
 
-	edm.setSessionLabels(dns.SplitDomainName(msg.Question[0].Name), labelLimit, sd)
+	edm.setLabels(dns.SplitDomainName(msg.Question[0].Name), labelLimit, &sd.dnsLabels)
 
 	if isQuery {
 		qms := string(dt.Message.QueryMessage)
@@ -2162,20 +2232,18 @@ func (edm *dnstapMinimiser) writeSessionParquet(ps *prevSessions, dataDir string
 		}
 	}()
 
-	parquetWriter, err := writer.NewParquetWriterFromWriter(outFile, new(sessionData), 4)
-	if err != nil {
-		return fmt.Errorf("writeSessionParquet: unable to create parquet writer: %w", err)
-	}
+	snappyCodec := parquet.LookupCompressionCodec(format.Snappy)
+	parquetWriter := parquet.NewGenericWriter[sessionData](outFile, parquet.Compression(snappyCodec))
 
-	for _, sessionData := range ps.sessions {
-		err = parquetWriter.Write(*sessionData)
+	for _, sd := range ps.sessions {
+		_, err = parquetWriter.Write([]sessionData{*sd})
 		if err != nil {
 			writeFailed = true
 			return fmt.Errorf("writeSessionParquet: unable to call Write() on parquet writer: %w", err)
 		}
 	}
 
-	err = parquetWriter.WriteStop()
+	err = parquetWriter.Close()
 	if err != nil {
 		writeFailed = true
 		return fmt.Errorf("writeSessionParquet: unable to call WriteStop() on parquet writer: %w", err)
@@ -2278,10 +2346,8 @@ func (edm *dnstapMinimiser) writeHistogramParquet(prevWellKnownDomainsData *well
 		}
 	}()
 
-	parquetWriter, err := writer.NewParquetWriterFromWriter(outFile, new(histogramData), 4)
-	if err != nil {
-		return fmt.Errorf("writeHistogramParquet: unable to create parquet writer: %w", err)
-	}
+	snappyCodec := parquet.LookupCompressionCodec(format.Snappy)
+	parquetWriter := parquet.NewGenericWriter[histogramData](outFile, parquet.Compression(snappyCodec))
 
 	startTimeMicro := startTime.UnixMicro()
 	for index, hGramData := range prevWellKnownDomainsData.m {
@@ -2293,23 +2359,21 @@ func (edm *dnstapMinimiser) writeHistogramParquet(prevWellKnownDomainsData *well
 		labels := dns.SplitDomainName(domain)
 
 		// Setting the labels now when we are out of the hot path.
-		edm.setHistogramLabels(labels, labelLimit, hGramData)
+		edm.setLabels(labels, labelLimit, &hGramData.dnsLabels)
 		hGramData.StartTime = startTimeMicro
 
 		// Write out the bytes from our hll data structures
-		v4ClientHLLString := string(hGramData.v4ClientHLL.ToBytes())
-		v6ClientHLLString := string(hGramData.v6ClientHLL.ToBytes())
-		hGramData.V4ClientCountHLLBytes = &v4ClientHLLString
-		hGramData.V6ClientCountHLLBytes = &v6ClientHLLString
+		hGramData.V4ClientCountHLLBytes = string(hGramData.v4ClientHLL.ToBytes())
+		hGramData.V6ClientCountHLLBytes = string(hGramData.v6ClientHLL.ToBytes())
 
-		err = parquetWriter.Write(hGramData)
+		_, err = parquetWriter.Write([]histogramData{*hGramData})
 		if err != nil {
 			writeFailed = true
 			return fmt.Errorf("writeHistogramParquet: unable to call Write() on parquet writer: %w", err)
 		}
 	}
 
-	err = parquetWriter.WriteStop()
+	err = parquetWriter.Close()
 	if err != nil {
 		writeFailed = true
 		return fmt.Errorf("writeHistogramParquet: unable to call WriteStop() on parquet writer: %w", err)
@@ -2496,7 +2560,7 @@ collectorLoop:
 				} else {
 					esb.set(edmStatusWellKnownExact)
 				}
-				wkd.m[wu.dawgIndex].EDMStatusBits = int64(*esb) // #nosec G115 -- The parquet field has convertedType=UINT_64 so overflow in uint64 -> int64 is OK
+				wkd.m[wu.dawgIndex].EDMStatusBits = uint64(*esb)
 			}
 
 			wkd.m[wu.dawgIndex].OKCount += wu.OKCount
