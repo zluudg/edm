@@ -20,7 +20,6 @@ import (
 	"github.com/segmentio/go-hll"
 	"github.com/smhanov/dawg"
 	"github.com/spaolacci/murmur3"
-	"github.com/xitongsys/parquet-go/writer"
 )
 
 var (
@@ -1709,60 +1708,6 @@ func ptr[T any](v T) *T {
 	return &v
 }
 
-func BenchmarkSessionWriterXitongsys(b *testing.B) {
-	b.ReportAllocs()
-
-	var buf bytes.Buffer
-	parquetWriter, err := writer.NewParquetWriterFromWriter(&buf, new(sessionDataXitongsys), 4)
-	if err != nil {
-		b.Fatalf("unable to create xitongsys parquet writer: %s", err)
-	}
-
-	ipInt, err := ipBytesToInt(netip.MustParseAddr("198.51.100.20").AsSlice())
-	if err != nil {
-		b.Fatalf("unable to create uint32 from address: %s", err)
-	}
-	i32IPInt := int32(ipInt) // #nosec G115 -- Used in parquet struct with logical type uint32
-
-	ip6NetworkUint, ip6HostUint, err := ip6BytesToInt(netip.MustParseAddr("2001:db8:1122:3344:5566:7788:99aa:bbcc").AsSlice())
-	if err != nil {
-		b.Fatalf("unable to create uint64 from ipv6 address: %s", err)
-	}
-	ip6NetworkInt := int64(ip6NetworkUint) // #nosec G115 -- Used in parquet struct with logical type uint64
-	ip6HostInt := int64(ip6HostUint)       // #nosec G115 -- Used in parquet struct with logical type uint64
-
-	sd := sessionDataXitongsys{
-		Label0:            ptr("com"),
-		Label1:            ptr("example"),
-		Label2:            ptr("www"),
-		ServerID:          ptr("serverID"),
-		QueryTime:         ptr(int64(10)),
-		ResponseTime:      ptr(int64(10)),
-		SourceIPv4:        &i32IPInt,
-		DestIPv4:          &i32IPInt,
-		SourceIPv6Network: &ip6NetworkInt,
-		SourceIPv6Host:    &ip6HostInt,
-		DestIPv6Network:   &ip6NetworkInt,
-		DestIPv6Host:      &ip6HostInt,
-		SourcePort:        ptr(int32(1337)),
-		DestPort:          ptr(int32(1337)),
-		DNSProtocol:       ptr(int32(1)),
-		QueryMessage:      ptr("query message"),
-		ResponseMessage:   ptr("response message"),
-	}
-
-	for b.Loop() {
-		err = parquetWriter.Write(sd)
-		if err != nil {
-			b.Fatalf("unable to call Write() on parquet writer: %s", err)
-		}
-	}
-	err = parquetWriter.WriteStop()
-	if err != nil {
-		b.Fatalf("unable to call WriteStop() on parquet writer: %s", err)
-	}
-}
-
 func BenchmarkSessionWriter(b *testing.B) {
 	b.ReportAllocs()
 
@@ -1814,70 +1759,6 @@ func BenchmarkSessionWriter(b *testing.B) {
 	err = parquetWriter.Close()
 	if err != nil {
 		b.Fatalf("unable to call WriteStop() on parquet writer: %s", err)
-	}
-}
-
-func TestSessionWriterXitongsys(t *testing.T) {
-	if !*genParquet {
-		t.Skip("skipping test generating parquet file in testdata directory")
-	}
-
-	f, err := os.Create("testdata/generated-session-xitongsys.parquet")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		err := f.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-	}()
-
-	parquetWriter, err := writer.NewParquetWriterFromWriter(f, new(sessionDataXitongsys), 4)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	ipInt, err := ipBytesToInt(netip.MustParseAddr("198.51.100.20").AsSlice())
-	if err != nil {
-		t.Fatalf("unable to create uint32 from address: %s", err)
-	}
-	i32IPInt := int32(ipInt) // #nosec G115 -- Used in parquet struct with logical type uint32
-
-	ip6NetworkUint, ip6HostUint, err := ip6BytesToInt(netip.MustParseAddr("2001:db8:1122:3344:5566:7788:99aa:bbcc").AsSlice())
-	if err != nil {
-		t.Fatalf("unable to create uint64 from ipv6 address: %s", err)
-	}
-	ip6NetworkInt := int64(ip6NetworkUint) // #nosec G115 -- Used in parquet struct with logical type uint64
-	ip6HostInt := int64(ip6HostUint)       // #nosec G115 -- Used in parquet struct with logical type uint64
-
-	sd := sessionDataXitongsys{
-		Label0:            ptr("com"),
-		Label1:            ptr("example"),
-		Label2:            ptr("www"),
-		ServerID:          ptr("serverID"),
-		QueryTime:         ptr(int64(10)),
-		ResponseTime:      ptr(int64(10)),
-		SourceIPv4:        &i32IPInt,
-		DestIPv4:          &i32IPInt,
-		SourceIPv6Network: &ip6NetworkInt,
-		SourceIPv6Host:    &ip6HostInt,
-		DestIPv6Network:   &ip6NetworkInt,
-		DestIPv6Host:      &ip6HostInt,
-		SourcePort:        ptr(int32(1337)),
-		DestPort:          ptr(int32(1337)),
-		DNSProtocol:       ptr(int32(1)),
-		QueryMessage:      ptr("query message"),
-		ResponseMessage:   ptr("response message"),
-	}
-
-	err = parquetWriter.Write(sd)
-	if err != nil {
-		t.Fatalf("unable to call Write() on parquet writer: %s", err)
-	}
-	err = parquetWriter.WriteStop()
-	if err != nil {
-		t.Fatalf("unable to call WriteStop() on parquet writer: %s", err)
 	}
 }
 
@@ -2015,71 +1896,6 @@ func TestHistogramWriter(t *testing.T) {
 	}
 }
 
-func TestHistogramWriterXitongsys(t *testing.T) {
-	if !*genParquet {
-		t.Skip("skipping test generating parquet file in testdata directory")
-	}
-
-	f, err := os.Create("testdata/generated-histogram-xitongsys.parquet")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		err := f.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-	}()
-
-	err = setHllDefaults()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	ip4 := netip.MustParseAddr("198.51.100.20")
-	ip6 := netip.MustParseAddr("2001:db8:1122:3344:5566:7788:99aa:bbcc")
-
-	v4hll := hll.Hll{}
-	v6hll := hll.Hll{}
-
-	v4hll.AddRaw(murmur3.Sum64(ip4.AsSlice()))
-	v6hll.AddRaw(murmur3.Sum64(ip6.AsSlice()))
-
-	parquetWriter, err := writer.NewParquetWriterFromWriter(f, new(histogramDataXitongsys), 4)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	hd := histogramDataXitongsys{
-		Label0:                ptr("com"),
-		Label1:                ptr("example"),
-		Label2:                ptr("www"),
-		StartTime:             10,
-		ACount:                11,
-		AAAACount:             12,
-		MXCount:               13,
-		NSCount:               14,
-		OtherTypeCount:        15,
-		NonINCount:            16,
-		OKCount:               17,
-		NXCount:               18,
-		FailCount:             19,
-		OtherRcodeCount:       20,
-		EDMStatusBits:         21,
-		V4ClientCountHLLBytes: ptr(string(v4hll.ToBytes())),
-		V6ClientCountHLLBytes: ptr(string(v6hll.ToBytes())),
-	}
-
-	err = parquetWriter.Write(hd)
-	if err != nil {
-		t.Fatalf("unable to call Write() on parquet writer: %s", err)
-	}
-	err = parquetWriter.WriteStop()
-	if err != nil {
-		t.Fatalf("unable to call WriteStop() on parquet writer: %s", err)
-	}
-}
-
 func BenchmarkHistogramWriter(b *testing.B) {
 	b.ReportAllocs()
 
@@ -2134,60 +1950,5 @@ func BenchmarkHistogramWriter(b *testing.B) {
 	err = parquetWriter.Close()
 	if err != nil {
 		b.Fatalf("unable to call WriteStop() on parquet writer: %s", err)
-	}
-}
-
-func BenchmarkHistogramWriterXitongsys(b *testing.B) {
-	b.ReportAllocs()
-
-	var buf bytes.Buffer
-	parquetWriter, err := writer.NewParquetWriterFromWriter(&buf, new(histogramDataXitongsys), 4)
-	if err != nil {
-		b.Fatalf("unable to create xitongsys histogram writer: %s", err)
-	}
-
-	err = setHllDefaults()
-	if err != nil {
-		b.Fatal(err)
-	}
-
-	ip4 := netip.MustParseAddr("198.51.100.20")
-	ip6 := netip.MustParseAddr("2001:db8:1122:3344:5566:7788:99aa:bbcc")
-
-	v4hll := hll.Hll{}
-	v6hll := hll.Hll{}
-
-	v4hll.AddRaw(murmur3.Sum64(ip4.AsSlice()))
-	v6hll.AddRaw(murmur3.Sum64(ip6.AsSlice()))
-
-	hd := histogramDataXitongsys{
-		Label0:                ptr("com"),
-		Label1:                ptr("example"),
-		Label2:                ptr("www"),
-		StartTime:             10,
-		ACount:                11,
-		AAAACount:             12,
-		MXCount:               13,
-		NSCount:               14,
-		OtherTypeCount:        15,
-		NonINCount:            16,
-		OKCount:               17,
-		NXCount:               18,
-		FailCount:             19,
-		OtherRcodeCount:       20,
-		EDMStatusBits:         21,
-		V4ClientCountHLLBytes: ptr(string(v4hll.ToBytes())),
-		V6ClientCountHLLBytes: ptr(string(v6hll.ToBytes())),
-	}
-
-	for b.Loop() {
-		err = parquetWriter.Write(hd)
-		if err != nil {
-			b.Fatalf("unable to call Write() on histogram writer: %s", err)
-		}
-	}
-	err = parquetWriter.WriteStop()
-	if err != nil {
-		b.Fatalf("unable to call WriteStop() on histogram writer: %s", err)
 	}
 }
