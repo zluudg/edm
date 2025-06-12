@@ -34,13 +34,13 @@ clean:
 
 tarball:
 	git describe --always --tags --dirty | awk -F "-" '{print $$1"^"$$2"."$$3}' > VERSION
-	sed -i -e "s/@@VERSION@@/$$(cat VERSION)/g" $(SPECFILE)
 	git archive --format=tar.gz --prefix=$(OUTPUT)/ -o $(OUTPUT).tar.gz --add-file VERSION HEAD
-	git checkout -- $(SPECFILE)
 
 srpm: SHELL:=/bin/bash
 srpm: tarball
 	mkdir -p rpm/{BUILD,RPMS,SRPMS}
 	cp $(OUTPUT).tar.gz rpm/SOURCES/
+	sed -i -e "s/@@VERSION@@/$$(cat VERSION)/g" $(SPECFILE)
 	rpmbuild -bs --define "%_topdir ./rpm" --undefine=dist $(SPECFILE)
+	git checkout -- $(SPECFILE)
 	test -z "$(outdir)" || cp rpm/SRPMS/*.src.rpm "$(outdir)"
