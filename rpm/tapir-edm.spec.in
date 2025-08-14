@@ -12,9 +12,15 @@ Source2:       well-known-domains.dawg
 Source3:       ignored.dawg
 Source4:       ignored-ips
 BuildRequires: git
-BuildRequires: golang
+%if 0%{?suse_version}
+BuildRequires: go
 %if 0%{?suse_version} >= 1500
+%ifarch x86_64 aarch64
 BuildRequires: go-race
+%endif
+%endif
+%else
+BuildRequires: golang
 %endif
 
 %description
