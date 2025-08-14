@@ -13,9 +13,17 @@ Source3:       ignored.dawg
 Source4:       ignored-ips
 BuildRequires: git
 BuildRequires: golang
+%if 0%{?suse_version} >= 1500
+BuildRequires: go-race
+%endif
 
 %description
 DNSTAPIR EDGE DNSTAP Minimiser
+
+# Disable building of debug packages for RHEL (we include symbols per default)
+%if 0%{?rhel} >= 9
+%global debug_package %{nil}
+%endif
 
 %{!?_unitdir: %define _unitdir /usr/lib/systemd/system/}
 %{!?_sysusersdir: %define _sysusersdir /usr/lib/sysusers.d/}
